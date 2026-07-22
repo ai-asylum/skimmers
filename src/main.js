@@ -1085,6 +1085,7 @@ function setupHole(idx) {
   G.raceTapeEvents = [];
   const tee = holeTee(idx), flag = holeFlag(idx);
   world.flag.setPosition(flag.x, flag.z);
+  world.pontoon.setPose(tee.x, tee.z, Math.atan2(flag.z - tee.z, flag.x - tee.x));
   world.course.setHole(HOLES[idx].path, HOLES[idx].islands, HOLES[idx].rocks);
   minimap.bake(HOLES[idx].path, HOLES[idx].islands, HOLES[idx].rocks);
   for (const s of G.racers) s.resetHole(tee.x, tee.z, 4);
@@ -1132,7 +1133,7 @@ function onSkimmerEvent(type, data) {
 
   // log splashy moments onto the race tape so the killcam can re-fire them
   if (G.state === "race" && !G.replay && G.raceTape.length) {
-    if (type === "skip" || type === "boing" || type === "blast" || type === "sink") {
+    if (type === "skip" || type === "boing" || type === "blast" || type === "sink" || type === "duckHit") {
       G.raceTapeEvents.push({ frame: G.raceTape.length - 1, type, x: data.at.x, y: data.at.y, z: data.at.z });
     } else if (type === "throw") {
       G.raceTapeEvents.push({ frame: G.raceTape.length - 1, type, who: s });
@@ -1195,6 +1196,23 @@ function onSkimmerEvent(type, data) {
       shake(mine ? 0.35 : 0.15);
       if (mine) { hitstop(0.07, 0.85); ui.flash(0.25); }
       world.scareDucks(data.at);
+      break;
+    }
+    case "duckHit": {
+      // The owning simulation already launched its duck; remote/replay views
+      // use the event position to launch their local matching duck.
+      world.hitDuck(data.at, s.vel);
+      particles.featherBurst(data.at, s.vel);
+      const sc = worldToScreen(data.at);
+      if (mine) {
+        shake(0.2);
+        hitstop(0.055, 0.72);
+        fovKick(3);
+        haptic([18, 25, 18]);
+        if (!sc.behind) ui.popup(sc.x, sc.y - 30, "FEATHER BOOST!", { size: 32, color: "#fff3bd" });
+      } else if (!sc.behind) {
+        ui.popup(sc.x, sc.y, "QUACK!", { size: 18, color: "#fff3bd" });
+      }
       break;
     }
     case "splashHit": {
@@ -1424,6 +1442,8 @@ function updateReplay(dt) {
       } else if (e.type === "sink") {
         particles.sinkSplash(at, 1);
         audio.sink();
+      } else if (e.type === "duckHit") {
+        particles.featherBurst(at, new THREE.Vector3(0, 0, 0.01));
       }
     }
   }
@@ -1557,6 +1577,7 @@ function updateRace(dt) {
     dt, elapsed: G.elapsed, water, boats,
     others: G.racers, flagPos: flag, captureR: CAPTURE_R,
     islands: HOLES[G.hole].islands, path: HOLES[G.hole].path, rocks: HOLES[G.hole].rocks,
+    hitDuck: (pos, vel) => world.hitDuck(pos, vel),
     onBotRecover: (s) => {
       particles.sinkSplash(s.pos, 0.7);
     },
@@ -1741,6 +1762,8 @@ function frame(now) {
 
   // submerged? dark-blue grade + wobble filter on the canvas
   const under = camRig.position.y < -0.15;
+  // fade rock outcrops that wedge between a submerged camera and what it's watching
+  world.course.updateOcclusion(_wsPos, cam.lookCur, under, rawDt);
   if (under !== G._underwater) {
     G._underwater = under;
     document.body.classList.toggle("underwater", under);

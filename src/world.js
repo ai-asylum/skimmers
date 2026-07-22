@@ -7,6 +7,7 @@
 import * as THREE from "three";
 import { HOOK_SPEED } from "./fishing.js";
 import { LAKE_R, WATER_Y, lakeDepthAt } from "./water.js";
+import { celMat } from "./celshader.js";
 
 const INK = 0x16324a;
 
@@ -299,6 +300,89 @@ export class FlagBuoy {
   }
 }
 
+// ------------------------------------------------------------------ tee pontoon
+// A floating wooden pontoon: the launch pad every rock starts from. Sits at the
+// hole's tee, its long axis pointing down-fairway so stones skip off the front
+// edge. Bobs gently on the swell like the flag buoy.
+export class Pontoon {
+  constructor(scene) {
+    this.group = new THREE.Group();
+    const wood = new THREE.MeshStandardMaterial({ color: 0xa9682f, flatShading: true });
+    const woodDark = new THREE.MeshStandardMaterial({ color: 0x7c4a1e, flatShading: true });
+    const woodMid = new THREE.MeshStandardMaterial({ color: 0x93571f, flatShading: true });
+
+    // sized to comfortably hold the spread-4 cluster of starting rocks
+    const LEN = 11, WID = 9;
+
+    // cross-beams that the deck planks rest on (run across the short axis)
+    const beams = new THREE.Group();
+    for (let i = 0; i < 4; i++) {
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, WID + 0.6), woodDark);
+      beam.position.set(-LEN / 2 + 0.9 + (i / 3) * (LEN - 1.8), -0.28, 0);
+      beams.add(beam);
+    }
+    this.group.add(beams);
+
+    // deck planks running the length of the pontoon, with hairline gaps
+    const nPlanks = 9;
+    const plankW = WID / nPlanks;
+    for (let i = 0; i < nPlanks; i++) {
+      const plank = new THREE.Mesh(
+        new THREE.BoxGeometry(LEN, 0.24, plankW * 0.86),
+        i % 2 ? wood : woodMid
+      );
+      plank.position.set(0, 0, -WID / 2 + plankW * (i + 0.5));
+      plank.receiveShadow = true;
+      this.group.add(plank);
+    }
+
+    // rimming trim so the edges read cleanly against the water
+    for (const side of [-1, 1]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(LEN, 0.28, 0.32), woodDark);
+      rail.position.set(0, 0.05, side * (WID / 2 - 0.16));
+      this.group.add(rail);
+    }
+
+    // support piles at the corners, plunging into the water
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const pile = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.26, 0.3, 2.6, 7),
+          woodDark
+        );
+        pile.position.set(sx * (LEN / 2 - 0.7), -1.35, sz * (WID / 2 - 0.7));
+        this.group.add(pile);
+      }
+    }
+
+    // a couple of little mooring posts on the down-fairway edge (+X)
+    for (const sz of [-1, 1]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.7, 6), woodMid);
+      post.position.set(LEN / 2 - 0.35, 0.42, sz * (WID / 2 - 1.1));
+      this.group.add(post);
+    }
+
+    this.group.visible = false;
+    scene.add(this.group);
+  }
+
+  /** place at the tee, long axis (+X) pointing toward the flag */
+  setPose(x, z, angleToFlag) {
+    this.group.position.set(x, WATER_Y, z);
+    this.group.rotation.y = -angleToFlag; // world +X row rotates to face the flag
+    this.group.visible = true;
+  }
+
+  update(dt, elapsed, water) {
+    if (!this.group.visible) return;
+    const p = this.group.position;
+    p.y = WATER_Y + water.heightAt(p.x, p.z, elapsed) * 1.1 - 0.1;
+    // slow raft roll — kept subtle so the starting rocks don't look adrift
+    this.group.rotation.z = Math.sin(elapsed * 0.7) * 0.02;
+    this.group.rotation.x = Math.cos(elapsed * 0.55) * 0.02;
+  }
+}
+
 // ------------------------------------------------------------------ ducks
 class Duck {
   constructor(scene) {
@@ -444,6 +528,8 @@ export class CourseMarkers {
     this.islandGroup = new THREE.Group();
     scene.add(this.islandGroup);
     this._bobPhases = this.buoys.map(() => Math.random() * 10);
+    // big rock outcrops we can fade when they block an underwater camera
+    this.outcrops = [];
   }
 
   setHole(path, islands, rocks = []) {
@@ -506,10 +592,13 @@ export class CourseMarkers {
     }
 
     // ---- big rock outcrops walling off the direct line to the flag
-    const stone = new THREE.MeshStandardMaterial({ color: 0x7d8a90, flatShading: true });
-    const stoneDark = new THREE.MeshStandardMaterial({ color: 0x5d686e, flatShading: true });
-    const moss = new THREE.MeshStandardMaterial({ color: 0x5da24e, flatShading: true });
+    // Per-outcrop material clones so we can fade an individual spire out when it
+    // wedges between an underwater camera and the rock it's tracking.
+    this.outcrops = [];
     for (const o of rocks) {
+      const stone = new THREE.MeshStandardMaterial({ color: 0x7d8a90, flatShading: true });
+      const stoneDark = new THREE.MeshStandardMaterial({ color: 0x5d686e, flatShading: true });
+      const moss = new THREE.MeshStandardMaterial({ color: 0x5da24e, flatShading: true });
       const g = new THREE.Group();
       // submerged root — the spire continues down to the lake bed, so the
       // underwater fishing view shows solid rock, not a floating island
@@ -543,6 +632,42 @@ export class CourseMarkers {
       g.add(cap);
       g.position.set(o.x, 0, o.z);
       this.islandGroup.add(g);
+      this.outcrops.push({ x: o.x, z: o.z, r: o.r, mats: [stone, stoneDark, moss], op: 1 });
+    }
+  }
+
+  /**
+   * Fade any rock outcrop that sits between the camera and its focus point so
+   * the underwater view never gets walled off by a spire in the foreground.
+   * Only fades while `enabled` (i.e. the camera is submerged); otherwise it
+   * eases everything back to solid.
+   */
+  updateOcclusion(camPos, focus, enabled, dt) {
+    if (!this.outcrops.length) return;
+    const ax = camPos.x, az = camPos.z;
+    const bx = focus.x, bz = focus.z;
+    const abx = bx - ax, abz = bz - az;
+    const abLen2 = abx * abx + abz * abz;
+    const k = Math.min(1, dt * 9); // fade smoothing
+    for (const o of this.outcrops) {
+      let target = 1;
+      if (enabled && abLen2 > 1e-3) {
+        const t = ((o.x - ax) * abx + (o.z - az) * abz) / abLen2;
+        if (t > -0.1 && t < 1) {
+          const cx = ax + abx * t, cz = az + abz * t;
+          const perp = Math.hypot(o.x - cx, o.z - cz);
+          if (perp < o.r + 2.2) target = 0.08;
+        }
+      }
+      o.op += (target - o.op) * k;
+      const transparent = o.op < 0.985;
+      for (const m of o.mats) {
+        const tm = celMat(m); // animate the toon twin actually being rendered
+        tm.transparent = transparent;
+        tm.opacity = o.op;
+        tm.depthWrite = o.op > 0.6;
+        if (tm !== m) { m.transparent = transparent; m.opacity = o.op; m.depthWrite = o.op > 0.6; }
+      }
     }
   }
 
@@ -634,6 +759,7 @@ export class World {
     makeTrees(scene);
     this.clouds = makeClouds(scene);
     this.flag = new FlagBuoy(scene);
+    this.pontoon = new Pontoon(scene);
     this.course = new CourseMarkers(scene);
     this.ducks = [new Duck(scene), new Duck(scene), new Duck(scene)];
 
@@ -654,6 +780,7 @@ export class World {
   update(dt, elapsed, water) {
     swayTime.value = elapsed;
     this.flag.update(dt, elapsed, water);
+    this.pontoon.update(dt, elapsed, water);
     this.course.update(dt, elapsed, water);
     for (const d of this.ducks) d.update(dt, elapsed, water);
     for (const c of this.clouds.children) {

@@ -47,7 +47,6 @@ export class Fishing {
 
     // UI
     this.el = document.getElementById("fishing-ui");
-    this.catchesEl = document.getElementById("fishing-catches");
 
     // fake pendulum state for the line/hook swing
     this.swingAng = 0;
@@ -90,12 +89,16 @@ export class Fishing {
     dome.position.y = 8;
     g.add(dome);
 
-    // sandy bed
+    // sandy bed — a radially subdivided disc (innerR≈0 so it's solid) whose
+    // vertices get displaced in start() to follow the real lake-bed bowl, so
+    // you can see the ground curve away under you
+    const floorGeo = new THREE.RingGeometry(0.001, 30, 48, 12);
+    floorGeo.rotateX(-Math.PI / 2); // lie flat in xz, y up
     const floor = new THREE.Mesh(
-      new THREE.CircleGeometry(30, 36),
+      floorGeo,
       new THREE.MeshStandardMaterial({ color: 0xc8b98a, flatShading: true })
     );
-    floor.rotation.x = -Math.PI / 2;
+    this.floor = floor;
     g.add(floor);
     // scattered pebbles
     const pebbleMat = new THREE.MeshStandardMaterial({ color: 0x8f9aa3, flatShading: true });
@@ -195,6 +198,18 @@ export class Fishing {
     this.group.position.set(spot.x, this.floorY, spot.z);
     this.group.visible = true;
 
+    // shape the sandy bed to the real bowl around this spot: each vertex sits
+    // at the actual lake-bed height relative to the diorama origin, so the
+    // ground visibly curves upward toward the shore side
+    const pos = this.floor.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const lx = pos.getX(i), lz = pos.getZ(i);
+      const worldDepth = lakeDepthAt(spot.x + lx, spot.z + lz);
+      pos.setY(i, this.depth - worldDepth); // local y; 0 at the spot itself
+    }
+    pos.needsUpdate = true;
+    this.floor.geometry.computeVertexNormals();
+
     // your stone tumbles down from the surface first; the line comes after
     this._rockSaved = { parent: rock.group.parent, pos: rock.group.position.clone(), rot: rock.group.rotation.clone() };
     this.fallY = this.depth - 0.7; // local, just under the surface
@@ -231,7 +246,6 @@ export class Fishing {
 
     this.el.classList.remove("hidden");
     els.throwUi.classList.add("hidden");
-    this.catchesEl.textContent = "";
   }
 
   /** camera pose for main's "fishing" mode — aquarium side view, framed to depth */
@@ -352,7 +366,6 @@ export class Fishing {
           this.swingVel += (Math.random() - 0.5) * 8; // the bump sets the line swinging
           audio.fishMiss();
           this.rock.kickEyes(1);
-          this.catchesEl.textContent = `fish bumps: ${this.hits}`;
           const wp = this.group.position;
           this.particles.glow.emit(wp.x + dispX, this.floorY + this.hookY, wp.z, dx * 2, 1, 0,
             0.4, 5, 1.0, 0.6, 0.3, 2, 1);

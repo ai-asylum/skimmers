@@ -168,12 +168,91 @@ class RingPool {
   }
 }
 
+// ------------------------------------------------------------------ feather meshes
+class FeatherPool {
+  constructor(scene, max = 64) {
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0.22);
+    shape.quadraticCurveTo(0.14, 0.08, 0.08, -0.16);
+    shape.lineTo(0, -0.25);
+    shape.lineTo(-0.08, -0.16);
+    shape.quadraticCurveTo(-0.14, 0.08, 0, 0.22);
+    const geo = new THREE.ShapeGeometry(shape, 4);
+    const colors = [0xfffdf4, 0xf7f3e8, 0xe9dfca];
+    this.feathers = [];
+    for (let i = 0; i < max; i++) {
+      const mesh = new THREE.Mesh(
+        geo,
+        new THREE.MeshBasicMaterial({ color: colors[i % colors.length], side: THREE.DoubleSide })
+      );
+      mesh.visible = false;
+      mesh.renderOrder = 6;
+      scene.add(mesh);
+      this.feathers.push({
+        mesh,
+        vel: new THREE.Vector3(),
+        spin: new THREE.Vector3(),
+        life: 0,
+      });
+    }
+    this.head = 0;
+  }
+
+  burst(pos, incomingVel, count = 34) {
+    const hmag = Math.max(0.001, Math.hypot(incomingVel.x, incomingVel.z));
+    const fx = incomingVel.x / hmag;
+    const fz = incomingVel.z / hmag;
+    for (let i = 0; i < count; i++) {
+      const f = this.feathers[this.head];
+      this.head = (this.head + 1) % this.feathers.length;
+      const a = Math.random() * Math.PI * 2;
+      const radial = 1.5 + Math.random() * 5;
+      f.mesh.visible = true;
+      f.mesh.position.copy(pos);
+      f.mesh.position.x += (Math.random() - 0.5) * 0.35;
+      f.mesh.position.y += (Math.random() - 0.5) * 0.25;
+      f.mesh.position.z += (Math.random() - 0.5) * 0.35;
+      f.mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+      f.mesh.scale.setScalar(0.8 + Math.random() * 0.9);
+      f.vel.set(
+        Math.cos(a) * radial + fx * (1 + Math.random() * 2),
+        3 + Math.random() * 6,
+        Math.sin(a) * radial + fz * (1 + Math.random() * 2)
+      );
+      f.spin.set(
+        (Math.random() - 0.5) * 14,
+        (Math.random() - 0.5) * 14,
+        (Math.random() - 0.5) * 14
+      );
+      f.life = 1.1 + Math.random() * 1.1;
+    }
+  }
+
+  update(dt) {
+    for (const f of this.feathers) {
+      if (f.life <= 0) continue;
+      f.life -= dt;
+      if (f.life <= 0) {
+        f.mesh.visible = false;
+        continue;
+      }
+      f.vel.y -= 5.5 * dt;
+      f.vel.multiplyScalar(Math.max(0, 1 - 0.7 * dt));
+      f.mesh.position.addScaledVector(f.vel, dt);
+      f.mesh.rotation.x += f.spin.x * dt;
+      f.mesh.rotation.y += f.spin.y * dt;
+      f.mesh.rotation.z += f.spin.z * dt;
+    }
+  }
+}
+
 // ------------------------------------------------------------------ facade
 export class Particles {
   constructor(scene) {
     this.spray = new PointPool(scene, 2600, { additive: false, sizeAtten: 110 });
     this.glow = new PointPool(scene, 1200, { additive: true, sizeAtten: 130 });
     this.rings = new RingPool(scene, 48);
+    this.feathers = new FeatherPool(scene, 64);
     this._tmpC = new THREE.Color();
   }
 
@@ -182,6 +261,7 @@ export class Particles {
     this.spray.update(dt, secondary);
     this.glow.update(dt, null);
     this.rings.update(dt);
+    this.feathers.update(dt);
   }
 
   /** skip splash — ring + fan of droplets kicked up behind the bounce */
@@ -331,6 +411,21 @@ export class Particles {
         (Math.random() - 0.5) * 2, 0.5 + Math.random() * 1.5, (Math.random() - 0.5) * 2,
         0.35 + Math.random() * 0.25, 0.9 + Math.random() * 0.8,
         this._tmpC.r, this._tmpC.g, this._tmpC.b, 3, 2
+      );
+    }
+  }
+
+  /** cream feather explosion when a stone clips a duck */
+  featherBurst(pos, vel) {
+    this.feathers.burst(pos, vel);
+    this.rings.spawn(pos.x, pos.z, 1.8, 0.65, 0xfff5d6);
+    for (let i = 0; i < 10; i++) {
+      const warm = 0.88 + Math.random() * 0.12;
+      this.spray.emit(
+        pos.x, pos.y, pos.z,
+        (Math.random() - 0.5) * 5, 1.5 + Math.random() * 4, (Math.random() - 0.5) * 5,
+        0.45 + Math.random() * 0.35, 2 + Math.random() * 2.5,
+        warm, warm * 0.98, warm * 0.9, 4, 1.4
       );
     }
   }

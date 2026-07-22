@@ -109,7 +109,7 @@ export class Skimmer {
     return true;
   }
 
-  /** advance the sim. ctx: { dt, elapsed, water, boats, others, flagPos, captureR } */
+  /** advance the sim. ctx: { dt, elapsed, water, boats, others, hitDuck, flagPos, captureR } */
   step(ctx) {
     const { dt, elapsed, water } = ctx;
     const rockH = 0.18;
@@ -177,6 +177,23 @@ export class Skimmer {
             this.rock.squashKick?.(0.9);
             this._emit("deckLand", { at: this.pos.clone() });
             break;
+          }
+        }
+
+        // clipping a duck sends it flying and gives the stone a comic speed burst
+        if (ctx.hitDuck && this.vel.lengthSq() > 9) {
+          const at = ctx.hitDuck(this.pos, this.vel);
+          if (at) {
+            const before = Math.hypot(this.vel.x, this.vel.z);
+            const boosted = Math.min(MAX_SPEED * 1.3, before * 1.28 + 2);
+            const boostScale = boosted / Math.max(0.001, before);
+            this.vel.x *= boostScale;
+            this.vel.z *= boostScale;
+            this.vel.y = Math.max(this.vel.y, 1.8);
+            this.spin += 8;
+            this.rock.kickEyes(2.2);
+            this.rock.squashKick?.(1.35);
+            this._emit("duckHit", { at, speed: boosted });
           }
         }
 
