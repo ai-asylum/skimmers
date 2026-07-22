@@ -108,18 +108,6 @@
 
   /* ---------- race HUD ---------- */
   #race-hud { z-index: 20; }
-  #hud-top {
-    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-    display: flex; gap: 14px; align-items: center;
-    background: rgba(10,42,61,0.72); border: 2px solid rgba(253,246,227,0.25);
-    padding: 8px 22px; border-radius: 40px; color: var(--paper);
-    font-weight: 900; font-size: 15px; letter-spacing: 0.06em;
-    backdrop-filter: blur(4px);
-  }
-  #hud-top .divider { width: 2px; height: 18px; background: rgba(253,246,227,0.3); }
-  #hud-hole { color: var(--gold); }
-  #hud-timer.low { color: var(--danger); animation: pulse 0.5s infinite alternate; }
-  @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.15); } }
 
   /* minimap — lives top-right where the scoreboard used to be */
   #minimap {
@@ -297,13 +285,6 @@
 
 <!-- race HUD -->
 <div id="race-hud" class="layer hidden">
-  <div id="hud-top">
-    <span id="hud-hole">HOLE 1/3</span>
-    <span class="divider"></span>
-    <span id="hud-throws">THROWS 0</span>
-    <span class="divider"></span>
-    <span id="hud-timer">1:15</span>
-  </div>
   <canvas id="minimap" width="190" height="190"></canvas>
   <div id="throw-ui">
     <div id="throw-hint">drag back &amp; release to skip</div>

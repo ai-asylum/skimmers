@@ -17,7 +17,7 @@ import { CelShader } from "./celshader.js";
 import { addOutline } from "./outline.js";
 import { Particles } from "./particles.js";
 import { Water, WATER_Y, LAKE_R } from "./water.js";
-import { World, shoreHeight } from "./world.js";
+import { World, shoreHeight, RivalLines } from "./world.js";
 import { Boats } from "./boats.js";
 import { Rock, ROCK_COLORS, ROCK_PATTERNS, rockName, randomBotRock, setEyeTarget } from "./rock.js";
 import { Skimmer, simulateThrow, BLAST_R } from "./physics.js";
@@ -57,6 +57,7 @@ const world = new World(scene);
 const boats = new Boats(scene);
 const particles = new Particles(scene);
 const fishing = new Fishing(scene, particles);
+const rivalLines = new RivalLines(scene);
 const minimap = new Minimap();
 const cel = new CelShader(scene, { steps: 4, floor: 0.42, rescanSec: 1.0 });
 
@@ -742,6 +743,8 @@ function routeSnapshot(msg) {
   const s = NET.byId.get(msg.id);
   if (!s || !s.isRemote) return;
   s.netTarget = [msg.p[0], msg.p[1], msg.p[2], msg.ry];
+  // a remote rival surfacing their rock deserves a splash
+  if (s.state === "fishing" && msg.st === "resting") particles.sinkSplash(s.pos, 0.7);
   s.state = msg.st;
   s.skips = msg.sk ?? s.skips;
 }
@@ -1519,6 +1522,7 @@ function nextHoleOrResults() {
 function endMatch(rowsIn = null) {
   G.state = "results";
   if (fishing.active) fishing.cancel();
+  rivalLines.hideAll();
   ui.els.raceHud.classList.add("hidden");
   hidePreview();
   const rows = (rowsIn ?? standingsRows()).map((r) => ({
@@ -1653,11 +1657,12 @@ function updateRace(dt) {
     }
   }
 
+  // rival fishing lines — watch who's paying the price
+  rivalLines.update(dt, G.elapsed, water, G.racers, G.player);
+
   // roll the full-scene killcam tape
   if (!G.replay) recordTapeFrame();
 
-  // HUD
-  ui.setHud(G.hole + 1, HOLES.length, p.throws, G.holeTime);
   minimapTick(dt);
 
   // gentle idle ripples around resting stones

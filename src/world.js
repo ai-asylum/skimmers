@@ -495,6 +495,61 @@ export class CourseMarkers {
   }
 }
 
+// ------------------------------------------------------------------ rival fishing lines
+// While a rival's stone is being reeled back, a bobber sits on the surface
+// above it with a line running down to the sunken rock — you can watch who's
+// paying the price, from above the water or during your own dive.
+export class RivalLines {
+  constructor(scene) {
+    this.rigs = [];
+    const lineMat = new THREE.MeshBasicMaterial({ color: 0xe8e8e8 });
+    const redMat = new THREE.MeshStandardMaterial({ color: 0xd94040, flatShading: true });
+    const whiteMat = new THREE.MeshStandardMaterial({ color: 0xf4f0e6, flatShading: true });
+    for (let i = 0; i < 8; i++) {
+      const g = new THREE.Group();
+      const bobber = new THREE.Group();
+      const top = new THREE.Mesh(new THREE.SphereGeometry(0.17, 8, 6), redMat);
+      top.position.y = 0.07;
+      bobber.add(top);
+      const bottom = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), whiteMat);
+      bottom.position.y = -0.07;
+      bobber.add(bottom);
+      g.add(bobber);
+      const line = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 1, 4), lineMat);
+      g.add(line);
+      g.visible = false;
+      scene.add(g);
+      this.rigs.push({ g, bobber, line, phase: Math.random() * 10 });
+    }
+  }
+
+  /** show a rig over every rival currently fishing; exclude = local player */
+  update(dt, elapsed, water, racers, exclude) {
+    let i = 0;
+    for (const s of racers ?? []) {
+      if (s === exclude || s.state !== "fishing") continue;
+      if (i >= this.rigs.length) break;
+      const rig = this.rigs[i++];
+      rig.g.visible = true;
+      const rx = s.mesh.position.x, rz = s.mesh.position.z;
+      const sway = Math.sin(elapsed * 1.3 + rig.phase) * 0.2;
+      const topY = water.heightAt(rx, rz, elapsed) + Math.sin(elapsed * 2.2 + rig.phase) * 0.05;
+      rig.bobber.position.set(rx + sway, topY + 0.08, rz);
+      rig.bobber.rotation.z = sway * 0.5;
+      const rockTop = s.mesh.position.y + 0.35;
+      const len = Math.max(0.3, rig.bobber.position.y - 0.07 - rockTop);
+      rig.line.scale.y = len;
+      rig.line.position.set(rx + sway * 0.5, rockTop + len / 2, rz);
+      rig.line.rotation.z = sway * 0.12;
+    }
+    for (; i < this.rigs.length; i++) this.rigs[i].g.visible = false;
+  }
+
+  hideAll() {
+    for (const rig of this.rigs) rig.g.visible = false;
+  }
+}
+
 // ------------------------------------------------------------------ world facade
 export class World {
   constructor(scene) {

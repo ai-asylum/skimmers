@@ -1,15 +1,12 @@
 /**
- * DOM-side juice: floating combo popups, springy banners, the HUD strip,
- * live scoreboard, screen flash, phase chrome (find/shape/paint), podium.
+ * DOM-side juice: floating combo popups, springy banners, screen flash,
+ * phase chrome (find/shape/paint), podium.
  */
 
 const $ = (id) => document.getElementById(id);
 
 export const els = {
   raceHud: $("race-hud"),
-  hole: $("hud-hole"),
-  throws: $("hud-throws"),
-  timer: $("hud-timer"),
   popups: $("popups"),
   banner: $("banner"),
   flash: $("flash"),
@@ -82,16 +79,6 @@ export function flash(strength = 0.5) {
       els.flash.style.opacity = "0";
     })
   );
-}
-
-// ---------------------------------------------------------------- HUD
-export function setHud(hole, totalHoles, throws, timeLeft) {
-  els.hole.textContent = `HOLE ${hole}/${totalHoles}`;
-  els.throws.textContent = `THROWS ${throws}`;
-  const m = Math.floor(Math.max(0, timeLeft) / 60);
-  const s = Math.floor(Math.max(0, timeLeft) % 60);
-  els.timer.textContent = `${m}:${String(s).padStart(2, "0")}`;
-  els.timer.classList.toggle("low", timeLeft < 12);
 }
 
 export function setThrowHint(text) {
