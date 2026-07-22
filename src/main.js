@@ -1434,6 +1434,7 @@ function updateReplay(dt) {
       lerp(fa[ri * 4 + 2], fb[ri * 4 + 2], t)
     );
     m.rotation.y = lerp(fa[ri * 4 + 3], fb[ri * 4 + 3], t);
+    s.rock.update(dt); // eyes keep tracking, squash springs keep settling
   });
   r.pos.set(
     lerp(fa[r.wIdx * 4], fb[r.wIdx * 4], t),

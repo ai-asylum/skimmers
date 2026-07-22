@@ -406,18 +406,21 @@ export class Rock {
       const s = this.pupilSprings[i];
       const px = Math.max(-0.07, Math.min(0.07, s.x.update(dt)));
       const py = Math.max(-0.07, Math.min(0.07, s.y.update(dt)));
-      // pupil slides on the eyeball toward the camera (clamped to the front
-      // face), with the spring jiggle layered on top
+      // pupil rides ON the eyeball surface toward the camera (front
+      // hemisphere only), spring jiggle folded into the direction — placing
+      // it on the ellipsoid keeps it visible from any angle instead of
+      // sinking inside the white
       const d = eye.worldToLocal(_eyeTmp.copy(EYE_TARGET)).normalize();
-      if (d.z < 0.35) {
-        d.z = 0.35;
+      if (d.z < 0.25) {
+        d.z = 0.25;
         d.normalize();
       }
-      eye.userData.pupil.position.set(
-        d.x * 0.09 + px * 0.7,
-        d.y * 0.09 + py * 0.7,
-        Math.max(0.055, d.z * 0.09)
-      );
+      d.x += px * 0.6;
+      d.y += py * 0.6;
+      d.normalize();
+      // eyeball is a 0.16-radius sphere squashed to 0.088 in z
+      const rr = 1 / Math.sqrt((d.x * d.x + d.y * d.y) / (0.16 * 0.16) + (d.z * d.z) / (0.088 * 0.088));
+      eye.userData.pupil.position.set(d.x * rr * 1.04, d.y * rr * 1.04, d.z * rr * 1.04);
     });
     const sq = Math.max(0.45, Math.min(1.45, this.squash.update(dt)));
     const w = 1 + (1 - sq) * 0.55; // conserve apparent volume
