@@ -1,0 +1,17 @@
+import { chromium } from "file:///Users/ruben/GameDev/spellwright/node_modules/playwright/index.mjs";
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+const errors = [];
+page.on("pageerror", (e) => errors.push(e.message));
+page.on("console", (m) => { if (m.type() === "error") errors.push("console: " + m.text()); });
+await page.goto("https://skimmers-lake.vercel.app", { waitUntil: "networkidle" });
+await page.waitForTimeout(2500);
+await page.click("#play-btn");
+await page.waitForTimeout(1500);
+await page.evaluate(() => window.__skimmers.selectCandidate(1));
+await page.click("#phase-next"); await page.waitForTimeout(300);
+await page.click("#phase-next"); await page.waitForTimeout(300);
+await page.click("#phase-next"); await page.waitForTimeout(4500);
+await page.screenshot({ path: "prod_check.png" });
+console.log(JSON.stringify({ errors, state: await page.evaluate(() => window.__skimmers.G.state) }));
+await browser.close();
