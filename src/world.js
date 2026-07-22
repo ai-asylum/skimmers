@@ -384,7 +384,7 @@ export class CourseMarkers {
     this._bobPhases = this.buoys.map(() => Math.random() * 10);
   }
 
-  setHole(path, islands) {
+  setHole(path, islands, rocks = []) {
     // ---- buoys every ~9u along the polyline, skipping ends
     let placed = 0;
     for (let seg = 0; seg < path.length - 1 && placed < this.buoys.length; seg++) {
@@ -440,6 +440,37 @@ export class CourseMarkers {
       palm.position.set(-isl.r * 0.3, isl.r * 0.12, 0);
       g.add(palm);
       g.position.set(isl.x, 0, isl.z);
+      this.islandGroup.add(g);
+    }
+
+    // ---- big rock outcrops walling off the direct line to the flag
+    const stone = new THREE.MeshStandardMaterial({ color: 0x7d8a90, flatShading: true });
+    const stoneDark = new THREE.MeshStandardMaterial({ color: 0x5d686e, flatShading: true });
+    const moss = new THREE.MeshStandardMaterial({ color: 0x5da24e, flatShading: true });
+    for (const o of rocks) {
+      const g = new THREE.Group();
+      // main spire — jagged, tall, unmistakably "not through here"
+      const spire = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), stone);
+      spire.scale.set(o.r * 0.8, o.h * 0.62, o.r * 0.72);
+      spire.position.y = o.h * 0.42;
+      spire.rotation.y = (o.x * 13.7) % Math.PI;
+      g.add(spire);
+      // leaning side slabs
+      for (let i = 0; i < 3; i++) {
+        const slab = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 0), i % 2 ? stoneDark : stone);
+        const a = (i / 3) * Math.PI * 2 + o.z;
+        const rr = o.r * (0.5 + (i % 2) * 0.3);
+        slab.scale.set(o.r * 0.42, o.h * (0.22 + i * 0.09), o.r * 0.4);
+        slab.position.set(Math.cos(a) * rr, o.h * (0.14 + i * 0.05), Math.sin(a) * rr);
+        slab.rotation.set((i - 1) * 0.24, a, (i - 1) * 0.18);
+        g.add(slab);
+      }
+      // mossy cap
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(o.r * 0.34, 7, 5), moss);
+      cap.scale.y = 0.4;
+      cap.position.y = o.h * 0.98;
+      g.add(cap);
+      g.position.set(o.x, 0, o.z);
       this.islandGroup.add(g);
     }
   }

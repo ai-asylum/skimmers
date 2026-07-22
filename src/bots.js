@@ -113,7 +113,7 @@ export class BotBrain {
     // candidate powers, judged with the shared preview sim
     let bestPower = 0.7, bestErr = Infinity;
     for (const pw of [0.35, 0.5, 0.65, 0.8, 0.95]) {
-      const sim = simulateThrow(s.pos, _dir, pw, mode, s.rock, ctx.water, ctx.elapsed, 5, ctx.islands);
+      const sim = simulateThrow(s.pos, _dir, pw, mode, s.rock, ctx.water, ctx.elapsed, 5, ctx.islands, ctx.rocks);
       const endP = sim.points[sim.points.length - 1];
       if (!endP) continue;
       const err = Math.hypot(endP.x - targetPos.x, endP.z - targetPos.z) + (sim.end === "sink" ? 8 : 0);

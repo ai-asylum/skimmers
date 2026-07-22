@@ -20,8 +20,8 @@ export class Minimap {
     return [(x / RANGE + 0.5) * SIZE, (z / RANGE + 0.5) * SIZE];
   }
 
-  /** redraw the static course layer: shore, lake, fairway path, islands, tee, flag */
-  bake(path, islands) {
+  /** redraw the static course layer: shore, lake, fairway path, islands, outcrops, tee, flag */
+  bake(path, islands, rocks = []) {
     const ctx = this.bakeCanvas.getContext("2d");
     const S = SIZE;
     ctx.clearRect(0, 0, S, S);
@@ -45,6 +45,19 @@ export class Minimap {
     ctx.beginPath();
     ctx.arc(S / 2, S / 2, lakePx, 0, Math.PI * 2);
     ctx.fill();
+
+    // rock outcrops (hazards — draw under the path line)
+    for (const o of rocks) {
+      const [x, y] = this._w2m(o.x, o.z);
+      const r = (o.r / RANGE) * S;
+      ctx.fillStyle = "#5d686e";
+      ctx.strokeStyle = "#3c454a";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
 
     // fairway path — dashed
     ctx.strokeStyle = "rgba(253,246,227,0.85)";

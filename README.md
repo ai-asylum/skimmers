@@ -32,7 +32,12 @@ find a rock → shape it → paint it → skip battle
 | **Ferry** | land *in* a rowboat and it carries your stone across the lake |
 
 Each hole is a fairway of buoys with doglegs and island rest stops — follow
-the minimap. First stone inside the flag ring takes the hole; most holes wins.
+the minimap. Giant rock spires wall off the straight line to the flag:
+**CLONK** into one and your chain is dead (a high splash-lob can just clear
+the shorter ones). First stone inside the flag ring takes the hole; most
+holes wins.
+
+![spires guard the flag](media/course.png)
 
 ## ✨ The juicy bits
 

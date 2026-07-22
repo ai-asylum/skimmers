@@ -65,13 +65,17 @@ const cel = new CelShader(scene, { steps: 4, floor: 0.42, rescanSec: 1.0 });
 // rest stops on the bends — land on one and you throw from dry sand, no fishing.
 const HOLES = [
   {
-    // gentle S through one island
+    // gentle S through one island; spires wall off the straight shot
     time: 90,
     path: [
       { x: 0, z: 46 }, { x: -18, z: 28 }, { x: -27, z: 6 },
       { x: -14, z: -16 }, { x: 0, z: -38 },
     ],
     islands: [{ x: -27, z: 6, r: 3.4 }],
+    rocks: [
+      { x: 4, z: 6, r: 5.5, h: 9 }, { x: 12, z: 22, r: 4.5, h: 8 },
+      { x: -3, z: -13, r: 4.2, h: 7 },
+    ],
   },
   {
     // double dogleg around the east shore, two islands
@@ -81,6 +85,10 @@ const HOLES = [
       { x: 34, z: -16 }, { x: 40, z: 6 }, { x: 28, z: 24 }, { x: 12, z: 34 },
     ],
     islands: [{ x: 12, z: -34, r: 3.2 }, { x: 40, z: 6, r: 3.6 }],
+    rocks: [
+      { x: -14, z: 2, r: 6, h: 9 }, { x: 2, z: 11, r: 5, h: 8 },
+      { x: -3, z: -11, r: 4.5, h: 7 },
+    ],
   },
   {
     // full zigzag, three islands
@@ -91,6 +99,10 @@ const HOLES = [
       { x: 8, z: 37 }, { x: 28, z: 26 },
     ],
     islands: [{ x: 14, z: -41, r: 3 }, { x: -36, z: -14, r: 3.4 }, { x: -16, z: 29, r: 3 }],
+    rocks: [
+      { x: 34, z: -2, r: 5.5, h: 9 }, { x: 25, z: 11, r: 4.5, h: 8 },
+      { x: 15, z: -13, r: 4.5, h: 7 }, { x: 0, z: 4, r: 5, h: 8 },
+    ],
   },
 ];
 const CAPTURE_R = 4.2;
@@ -120,8 +132,19 @@ const G = {
   throwMode: "skip",
   throwCooldown: 0,
   slowmoUsed: false,
+  aimDir: new THREE.Vector3(0, 0, -1), // camera-following aim direction
   effects: [], // { t, fn } delayed one-shots on game time
 };
+
+/** point the aim (and thus the camera) from the player's lie toward the flag */
+function resetAim() {
+  const p = G.player;
+  if (!p) return;
+  const f = holeFlag();
+  G.aimDir.set(f.x - p.pos.x, 0, f.z - p.pos.z);
+  if (G.aimDir.lengthSq() < 0.01) G.aimDir.set(0, 0, -1);
+  G.aimDir.normalize();
+}
 
 function after(sec, fn) { G.effects.push({ t: sec, fn }); }
 
@@ -241,11 +264,8 @@ function camUpdate(dt) {
     targetLook = lookStart.lerp(lookEnd, e);
     if (t >= 1) cam.mode = "aim";
   } else if (cam.mode === "aim" && p) {
-    const flag = currentFlagV3();
-    const dir = new THREE.Vector3().subVectors(flag, p.pos);
-    dir.y = 0;
-    if (dir.lengthSq() < 0.01) dir.set(0, 0, -1);
-    dir.normalize();
+    // orbit behind the CURRENT aim so the trajectory previz stays centered
+    const dir = G.aimDir;
     const pull = drag.power * 2.2;
     targetPos = p.pos.clone().addScaledVector(dir, -(6.5 + pull)).add(new THREE.Vector3(0, 3.4 + pull * 0.4, 0));
     targetLook = p.pos.clone().addScaledVector(dir, 10).add(new THREE.Vector3(0, 1.2, 0));
@@ -269,7 +289,12 @@ function camUpdate(dt) {
     targetLook = cam.look;
   }
 
-  const l = cam.mode === "flight" ? 6.5 : cam.mode === "intro" ? 8 : cam.mode === "replay" ? 6 : 3.6;
+  // snappier orbit while actively dragging so the previz tracks the pointer
+  const l = cam.mode === "flight" ? 6.5
+    : cam.mode === "intro" ? 8
+    : cam.mode === "replay" ? 6
+    : cam.mode === "aim" && drag.active ? 6.5
+    : 3.6;
   camRig.position.x = damp(camRig.position.x, targetPos.x, l, dt);
   camRig.position.y = damp(camRig.position.y, targetPos.y, l, dt);
   camRig.position.z = damp(camRig.position.z, targetPos.z, l, dt);
@@ -307,10 +332,11 @@ function updateDragAim() {
   const ang = -dx * 0.005;
   const cos = Math.cos(ang), sin = Math.sin(ang);
   drag.dir.set(base.x * cos - base.z * sin, 0, base.x * sin + base.z * cos);
+  G.aimDir.copy(drag.dir); // camera orbits to keep the previz centered
 
   // preview via the real sim
   previewMat.color.setHex(G.throwMode === "splash" ? 0xff9aac : 0xffffff);
-  const sim = simulateThrow(p.pos, drag.dir, drag.power, G.throwMode, p.rock, water, G.elapsed, 6, HOLES[G.hole].islands);
+  const sim = simulateThrow(p.pos, drag.dir, drag.power, G.throwMode, p.rock, water, G.elapsed, 6, HOLES[G.hole].islands, HOLES[G.hole].rocks);
   const step = Math.max(1, Math.floor(sim.points.length / previewDots.length));
   let di = 0;
   for (let i = 0; i < sim.points.length && di < previewDots.length; i += step) {
@@ -340,7 +366,7 @@ function tryPlayerThrow() {
   // invisible aim assist (team scrap: invisible-driving-assist-layer):
   // if the throw would land near the flag line, nudge it a touch truer
   if (G.throwMode === "skip") {
-    const sim = simulateThrow(p.pos, drag.dir, power, "skip", p.rock, water, G.elapsed, 6, HOLES[G.hole].islands);
+    const sim = simulateThrow(p.pos, drag.dir, power, "skip", p.rock, water, G.elapsed, 6, HOLES[G.hole].islands, HOLES[G.hole].rocks);
     const end = sim.points[sim.points.length - 1];
     if (end) {
       const flag = currentFlagV3();
@@ -982,8 +1008,8 @@ function setupHole(idx) {
   G.slowmoUsed = false;
   const tee = holeTee(idx), flag = holeFlag(idx);
   world.flag.setPosition(flag.x, flag.z);
-  world.course.setHole(HOLES[idx].path, HOLES[idx].islands);
-  minimap.bake(HOLES[idx].path, HOLES[idx].islands);
+  world.course.setHole(HOLES[idx].path, HOLES[idx].islands, HOLES[idx].rocks);
+  minimap.bake(HOLES[idx].path, HOLES[idx].islands, HOLES[idx].rocks);
   for (const s of G.racers) s.resetHole(tee.x, tee.z, 4);
   for (const b of G.bots) {
     b.cooldown = 3.2 + Math.random() * 3.5; // let the intro flyover breathe
@@ -991,6 +1017,7 @@ function setupHole(idx) {
   }
   cam.mode = "intro";
   G.introT = 0;
+  resetAim();
   // snap the rig to the flyover start so the wipe reveals a framed shot
   {
     const flagV = new THREE.Vector3(flag.x, 0, flag.z);
@@ -1055,6 +1082,7 @@ function onSkimmerEvent(type, data) {
       if (mine) {
         cam.mode = "aim";
         G.throwCooldown = 0.4;
+        resetAim();
         if (s.skips >= 3) {
           const sc = worldToScreen(s.pos);
           if (!sc.behind) ui.popup(sc.x, sc.y - 40, `${s.skips} skips!`, { size: 26, color: "#aef4ff" });
@@ -1118,10 +1146,26 @@ function onSkimmerEvent(type, data) {
         ui.banner("FERRY RIDE!", "the rowboat carries your stone — throw when ready", 2.2);
         cam.mode = "aim";
         G.throwCooldown = 0.4;
+        resetAim();
         shake(0.1);
       } else {
         const sc = worldToScreen(data.at);
         if (!sc.behind) ui.popup(sc.x, sc.y, `${s.name} hitched a ride!`, { size: 16, color: "#fff" });
+      }
+      break;
+    }
+    case "clonk": {
+      audio.thunk();
+      particles.grindChips(data.at);
+      particles.skipSplash(data.at, s.vel, 0.3);
+      const sc = worldToScreen(data.at);
+      if (mine) {
+        shake(0.3);
+        hitstop(0.05, 0.8);
+        if (!sc.behind) ui.popup(sc.x, sc.y - 10, "CLONK!", { size: 30, color: "#c8d2d8" });
+        haptic([25, 30]);
+      } else if (!sc.behind) {
+        ui.popup(sc.x, sc.y, "clonk", { size: 16, color: "#c8d2d8" });
       }
       break;
     }
@@ -1134,6 +1178,7 @@ function onSkimmerEvent(type, data) {
         ui.banner("SAFE ON SAND", "dry land — throw again whenever, no fishing here", 1.6);
         cam.mode = "aim";
         G.throwCooldown = 0.4;
+        resetAim();
         shake(0.08);
       } else if (!sc.behind) {
         ui.popup(sc.x, sc.y, `${s.name} island-hopped`, { size: 15, color: "#6fe07a" });
@@ -1147,6 +1192,7 @@ function onSkimmerEvent(type, data) {
         if (!sc.behind) ui.popup(sc.x, sc.y, "BEACHED", { size: 26, color: "#eed9a4" });
         cam.mode = "aim";
         G.throwCooldown = 0.4;
+        resetAim();
       }
       break;
     }
@@ -1374,7 +1420,7 @@ function updateRace(dt) {
   const ctx = {
     dt, elapsed: G.elapsed, water, boats,
     others: G.racers, flagPos: flag, captureR: CAPTURE_R,
-    islands: HOLES[G.hole].islands, path: HOLES[G.hole].path,
+    islands: HOLES[G.hole].islands, path: HOLES[G.hole].path, rocks: HOLES[G.hole].rocks,
     onBotRecover: (s) => {
       particles.sinkSplash(s.pos, 0.7);
     },
@@ -1457,6 +1503,7 @@ function updateRace(dt) {
       if (!sc.behind) ui.popup(sc.x, sc.y - 30, clean ? "CLEAN CATCH!" : "got it back...", { size: 28, color: "#6fe07a" });
       cam.mode = "aim";
       G.throwCooldown = 0.4;
+      resetAim();
       p.rock.kickEyes(1.5);
     });
   }

@@ -19,6 +19,18 @@ export const BLAST_R = 2.6; // splash lob knock radius
 
 const _tmp = new THREE.Vector3();
 
+/** cylinder test against a hole's big rock outcrops */
+function hitOutcrop(pos, rocks) {
+  for (const o of rocks) {
+    const dx = pos.x - o.x, dz = pos.z - o.z;
+    const d = Math.hypot(dx, dz);
+    if (d < o.r && pos.y < o.h) {
+      return { o, nx: dx / (d || 1), nz: dz / (d || 1) };
+    }
+  }
+  return null;
+}
+
 export class Skimmer {
   constructor(rock, name, isPlayer = false, tint = "#ffd24a") {
     this.rock = rock; // Rock instance (owns the mesh)
@@ -107,6 +119,28 @@ export class Skimmer {
         this.vel.y -= GRAVITY * dt;
         this.pos.addScaledVector(this.vel, dt);
         this.spin = Math.max(2, this.spin - dt * 6);
+
+        // big rock outcrops wall off the direct line — CLONK and drop
+        if (ctx.rocks) {
+          const hit = hitOutcrop(this.pos, ctx.rocks);
+          if (hit) {
+            const { o, nx, nz } = hit;
+            this.pos.x = o.x + nx * o.r;
+            this.pos.z = o.z + nz * o.r;
+            const dot = this.vel.x * nx + this.vel.z * nz;
+            if (dot < 0) {
+              this.vel.x -= 2 * dot * nx;
+              this.vel.z -= 2 * dot * nz;
+            }
+            this.vel.x *= 0.4;
+            this.vel.z *= 0.4;
+            this.vel.y = Math.min(this.vel.y * 0.4, 1.5);
+            this.skips = Math.max(this.skips, 1); // a clonk breaks the chain
+            this.rock.kickEyes(2);
+            this.rock.squashKick?.(1.1);
+            this._emit("clonk", { at: this.pos.clone() });
+          }
+        }
 
         // killcam tape
         this.tape.push({ x: this.pos.x, y: this.pos.y, z: this.pos.z, ry: this.mesh.rotation.y });
@@ -360,7 +394,7 @@ Skimmer.prototype._waterContact = function (ctx, waterY) {
  * Dry-run a throw with the same maths for the aim preview.
  * Returns { points: Vector3[], skips: Vector3[], end: 'rest'|'sink'|'flying' }.
  */
-export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed, maxT = 6, islands = null) {
+export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed, maxT = 6, islands = null, rocks = null) {
   const s = {
     pos: startPos.clone(),
     vel: new THREE.Vector3(),
@@ -380,6 +414,20 @@ export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed
     s.vel.y -= GRAVITY * dt;
     s.pos.addScaledVector(s.vel, dt);
     if ((points.length === 0) || t % (dt * 3) < dt) points.push(s.pos.clone());
+    if (rocks) {
+      const hit = hitOutcrop(s.pos, rocks);
+      if (hit) {
+        // preview shows the clonk honestly: reflect, damp, keep simulating
+        const { o, nx, nz } = hit;
+        s.pos.x = o.x + nx * o.r;
+        s.pos.z = o.z + nz * o.r;
+        const dot = s.vel.x * nx + s.vel.z * nz;
+        if (dot < 0) { s.vel.x -= 2 * dot * nx; s.vel.z -= 2 * dot * nz; }
+        s.vel.x *= 0.4; s.vel.z *= 0.4;
+        s.vel.y = Math.min(s.vel.y * 0.4, 1.5);
+        skips.push(s.pos.clone());
+      }
+    }
     if (islands) {
       let hitIsl = false;
       for (const isl of islands) {
