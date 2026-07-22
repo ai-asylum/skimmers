@@ -258,7 +258,7 @@
 
   /* underwater grade: deep blue tint + canvas wobble while the camera is submerged */
   #underwater-tint {
-    z-index: 6; opacity: 0; transition: opacity 0.6s ease;
+    z-index: 6; opacity: 0; transition: opacity 0.15s ease-out;
     background: radial-gradient(ellipse at 50% 35%, rgba(10,60,110,0.28) 0%, rgba(4,24,52,0.6) 100%);
   }
   body.underwater #underwater-tint { opacity: 1; }
