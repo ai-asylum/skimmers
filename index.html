@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>SKIMMERS — rock skipping race</title>
+<style>
+  :root {
+    --ink: #16324a;
+    --paper: #fdf6e3;
+    --accent: #ff8a3d;
+    --accent2: #37c8e0;
+    --gold: #ffd24a;
+    --danger: #ff5470;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a2a3d; }
+  body { font-family: "Trebuchet MS", "Comic Sans MS", cursive, sans-serif; color: var(--ink); }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+
+  /* ---------- generic layers ---------- */
+  .layer { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  .clickable { pointer-events: auto; }
+  .hidden { display: none !important; }
+
+  /* ---------- big cartoon text ---------- */
+  .bigtitle {
+    font-size: clamp(48px, 11vw, 130px);
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    color: var(--paper);
+    -webkit-text-stroke: 3px var(--ink);
+    text-shadow: 0 6px 0 var(--ink), 0 10px 24px rgba(0,0,0,0.4);
+    transform: rotate(-3deg);
+  }
+
+  /* ---------- title screen ---------- */
+  #title-screen {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; z-index: 40; pointer-events: auto;
+    background: radial-gradient(ellipse at 50% 120%, rgba(20,90,120,0.25), transparent 60%);
+  }
+  #title-screen .sub {
+    font-size: clamp(14px, 2.4vw, 22px); color: var(--paper); font-weight: 700;
+    text-shadow: 0 2px 0 rgba(0,0,0,0.5); letter-spacing: 0.12em; text-transform: uppercase;
+  }
+  .btn {
+    pointer-events: auto; cursor: pointer; border: none;
+    font-family: inherit; font-weight: 900; letter-spacing: 0.06em;
+    font-size: clamp(18px, 3vw, 28px); color: var(--ink);
+    background: var(--gold);
+    padding: 16px 44px; border-radius: 60px;
+    box-shadow: 0 6px 0 #c99a1d, 0 12px 24px rgba(0,0,0,0.35);
+    transition: transform 0.08s ease, box-shadow 0.08s ease;
+    text-transform: uppercase;
+  }
+  .btn:hover { transform: translateY(-2px) scale(1.04) rotate(-1deg); }
+  .btn:active { transform: translateY(4px); box-shadow: 0 2px 0 #c99a1d, 0 4px 10px rgba(0,0,0,0.35); }
+  .btn.small { font-size: 16px; padding: 10px 24px; box-shadow: 0 4px 0 #c99a1d, 0 8px 14px rgba(0,0,0,0.3); }
+  .btn.blue { background: var(--accent2); box-shadow: 0 6px 0 #1d8fa3, 0 12px 24px rgba(0,0,0,0.35); }
+  .btn.blue:active { box-shadow: 0 2px 0 #1d8fa3, 0 4px 10px rgba(0,0,0,0.35); }
+
+  /* ---------- phase header (find/shape/paint) ---------- */
+  #phase-ui { z-index: 30; display: flex; flex-direction: column; align-items: center; }
+  #phase-title {
+    margin-top: 4vh;
+    font-size: clamp(28px, 6vw, 56px); font-weight: 900; color: var(--paper);
+    -webkit-text-stroke: 2px var(--ink);
+    text-shadow: 0 4px 0 var(--ink), 0 8px 18px rgba(0,0,0,0.35);
+    transform: rotate(-2deg);
+  }
+  #phase-hint {
+    margin-top: 6px; font-size: clamp(13px, 2vw, 18px); font-weight: 700; color: var(--paper);
+    text-shadow: 0 2px 4px rgba(0,0,0,0.6); background: rgba(10,42,61,0.55);
+    padding: 6px 18px; border-radius: 20px;
+  }
+  #phase-bottom {
+    position: absolute; bottom: 4vh; left: 0; right: 0;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+  }
+
+  /* stat bars for the rock */
+  #rock-stats { display: flex; gap: 18px; background: rgba(253,246,227,0.92); padding: 12px 20px; border-radius: 18px;
+    box-shadow: 0 4px 0 rgba(22,50,74,0.6), 0 10px 20px rgba(0,0,0,0.3); }
+  .stat { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 90px; }
+  .stat label { font-size: 12px; font-weight: 900; letter-spacing: 0.1em; }
+  .stat .bar { width: 100%; height: 12px; background: #d8ccb1; border-radius: 6px; overflow: hidden; border: 2px solid var(--ink); }
+  .stat .bar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.15s ease; }
+  .stat.flat .bar i { background: var(--accent2); }
+  .stat.grit .bar i { background: var(--gold); }
+
+  /* paint palette */
+  #paint-ui { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  .swatch-row { display: flex; gap: 10px; }
+  .swatch {
+    width: 44px; height: 44px; border-radius: 50%; border: 3px solid var(--ink); cursor: pointer;
+    box-shadow: 0 3px 0 rgba(0,0,0,0.4); transition: transform 0.1s ease; pointer-events: auto;
+  }
+  .swatch:hover { transform: scale(1.15) rotate(6deg); }
+  .swatch.sel { outline: 4px solid var(--paper); transform: scale(1.18); }
+  .pattern-chip {
+    padding: 8px 16px; border-radius: 14px; border: 3px solid var(--ink); background: var(--paper);
+    font-weight: 900; font-size: 14px; cursor: pointer; box-shadow: 0 3px 0 rgba(0,0,0,0.35);
+    pointer-events: auto; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .pattern-chip:hover { transform: translateY(-2px); }
+  .pattern-chip.sel { background: var(--gold); }
+
+  /* ---------- race HUD ---------- */
+  #race-hud { z-index: 20; }
+  #hud-top {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 14px; align-items: center;
+    background: rgba(10,42,61,0.72); border: 2px solid rgba(253,246,227,0.25);
+    padding: 8px 22px; border-radius: 40px; color: var(--paper);
+    font-weight: 900; font-size: 15px; letter-spacing: 0.06em;
+    backdrop-filter: blur(4px);
+  }
+  #hud-top .divider { width: 2px; height: 18px; background: rgba(253,246,227,0.3); }
+  #hud-hole { color: var(--gold); }
+  #hud-timer.low { color: var(--danger); animation: pulse 0.5s infinite alternate; }
+  @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.15); } }
+
+  /* scoreboard */
+  #scoreboard {
+    position: absolute; top: 70px; right: 12px; display: flex; flex-direction: column; gap: 4px;
+    font-size: 12px; font-weight: 700;
+  }
+  .score-row {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(10,42,61,0.65); color: var(--paper);
+    padding: 4px 10px 4px 6px; border-radius: 20px;
+    border: 2px solid transparent;
+    transition: transform 0.2s ease, border-color 0.2s;
+  }
+  .score-row.me { border-color: var(--gold); }
+  .score-row.fishing { opacity: 0.6; }
+  .score-row .dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.7); flex: 0 0 16px; }
+  .score-row .name { min-width: 74px; }
+  .score-row .dist { color: var(--accent2); min-width: 40px; text-align: right; }
+  .score-row .holes { color: var(--gold); }
+
+  /* minimap */
+  #minimap {
+    position: absolute; left: 14px; bottom: 14px;
+    width: 152px; height: 152px;
+    border-radius: 50%; border: 3px solid rgba(253,246,227,0.55);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+    background: rgba(10,42,61,0.5);
+  }
+
+  /* power + mode */
+  #throw-ui {
+    position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+  }
+  #mode-toggle { display: flex; gap: 0; border-radius: 30px; overflow: hidden; border: 3px solid var(--ink);
+    box-shadow: 0 4px 0 rgba(0,0,0,0.4); pointer-events: auto; }
+  #mode-toggle button {
+    border: none; font-family: inherit; font-weight: 900; font-size: 14px; letter-spacing: 0.08em;
+    padding: 9px 22px; cursor: pointer; background: var(--paper); color: var(--ink); text-transform: uppercase;
+  }
+  #mode-toggle button.sel { background: var(--accent); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+  #mode-toggle button#mode-splash.sel { background: var(--danger); }
+  #throw-hint { font-size: 13px; font-weight: 700; color: var(--paper); text-shadow: 0 2px 4px rgba(0,0,0,0.7);
+    background: rgba(10,42,61,0.55); padding: 4px 14px; border-radius: 16px; }
+
+  /* combo popups + floating text */
+  #popups { z-index: 25; overflow: hidden; }
+  .popup {
+    position: absolute; font-weight: 900; white-space: nowrap;
+    -webkit-text-stroke: 1.5px var(--ink);
+    text-shadow: 0 3px 0 var(--ink), 0 6px 14px rgba(0,0,0,0.4);
+    transform: translate(-50%, -50%);
+    animation: popfloat 1.1s ease-out forwards;
+    will-change: transform, opacity;
+  }
+  @keyframes popfloat {
+    0%   { transform: translate(-50%,-50%) scale(0.2) rotate(var(--rot)); opacity: 0; }
+    12%  { transform: translate(-50%,-60%) scale(1.25) rotate(var(--rot)); opacity: 1; }
+    24%  { transform: translate(-50%,-64%) scale(1.0) rotate(var(--rot)); }
+    75%  { opacity: 1; }
+    100% { transform: translate(-50%,-160%) scale(1.02) rotate(var(--rot)); opacity: 0; }
+  }
+
+  /* center banners */
+  #banner {
+    position: absolute; top: 26%; left: 50%; transform: translateX(-50%);
+    text-align: center; z-index: 26; pointer-events: none;
+  }
+  .banner-text {
+    font-size: clamp(34px, 8vw, 84px); font-weight: 900; color: var(--gold);
+    -webkit-text-stroke: 2.5px var(--ink);
+    text-shadow: 0 5px 0 var(--ink), 0 10px 24px rgba(0,0,0,0.45);
+    animation: bannerIn 0.45s cubic-bezier(0.18, 1.6, 0.4, 1) both;
+    transform-origin: 50% 50%;
+  }
+  .banner-sub {
+    font-size: clamp(14px, 2.6vw, 24px); font-weight: 800; color: var(--paper);
+    text-shadow: 0 2px 6px rgba(0,0,0,0.7); margin-top: 4px;
+    animation: bannerIn 0.5s 0.08s cubic-bezier(0.18, 1.6, 0.4, 1) both;
+  }
+  @keyframes bannerIn {
+    0% { transform: scale(0) rotate(-10deg); opacity: 0; }
+    100% { transform: scale(1) rotate(-2deg); opacity: 1; }
+  }
+  .banner-out { animation: bannerOut 0.3s ease-in both !important; }
+  @keyframes bannerOut { to { transform: scale(0.6) rotate(4deg); opacity: 0; } }
+
+  /* ---------- fishing minigame ---------- */
+  #fishing-ui {
+    z-index: 32; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+    padding-bottom: 10vh; background: radial-gradient(ellipse at 50% 100%, rgba(6,30,48,0.55), transparent 70%);
+  }
+  #fishing-title { font-size: clamp(24px,5vw,44px); font-weight: 900; color: var(--paper);
+    -webkit-text-stroke: 2px var(--ink); text-shadow: 0 4px 0 var(--ink); transform: rotate(-2deg); margin-bottom: 12px; }
+  #fishing-bar-wrap {
+    width: min(70vw, 480px); height: 34px; border-radius: 20px; border: 4px solid var(--ink);
+    background: linear-gradient(90deg, #0d3854, #1b6f8f); position: relative; overflow: hidden;
+    box-shadow: 0 6px 0 rgba(0,0,0,0.4), inset 0 3px 8px rgba(0,0,0,0.5);
+  }
+  #fishing-zone { position: absolute; top: 0; bottom: 0; background: rgba(255,210,74,0.85); border-radius: 12px;
+    box-shadow: inset 0 0 12px rgba(255,255,255,0.5); }
+  #fishing-cursor { position: absolute; top: -4px; bottom: -4px; width: 6px; background: #fff; border-radius: 3px;
+    box-shadow: 0 0 10px #fff, 0 0 20px var(--accent2); }
+  #fishing-hint { margin-top: 12px; font-weight: 800; color: var(--paper); text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
+  #fishing-catches { margin-top: 6px; font-size: 22px; letter-spacing: 6px; }
+
+  /* ---------- results podium ---------- */
+  #results-ui {
+    z-index: 45; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+    background: rgba(6,26,40,0.55); backdrop-filter: blur(3px); pointer-events: auto;
+  }
+  #results-list { display: flex; flex-direction: column; gap: 8px; min-width: min(80vw, 420px); }
+  .result-row {
+    display: flex; align-items: center; gap: 14px; background: var(--paper);
+    padding: 10px 18px; border-radius: 16px; font-weight: 900;
+    box-shadow: 0 4px 0 rgba(0,0,0,0.35);
+    animation: rowIn 0.4s cubic-bezier(0.18, 1.4, 0.4, 1) both;
+  }
+  .result-row.first { background: var(--gold); transform: scale(1.06); font-size: 1.1em; }
+  .result-row .place { font-size: 22px; width: 40px; }
+  .result-row .dot { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid var(--ink); }
+  .result-row .rname { flex: 1; }
+  @keyframes rowIn { 0% { transform: translateX(-60px) scale(0.8); opacity: 0; } 100% { opacity: 1; } }
+
+  /* ---------- killcam letterbox ---------- */
+  #letterbox { z-index: 27; }
+  #letterbox .bar { position: absolute; left: 0; right: 0; height: 0; background: #0a1622; transition: height 0.45s cubic-bezier(0.7,0,0.3,1); }
+  #letterbox .bar.top { top: 0; }
+  #letterbox .bar.bot { bottom: 0; }
+  #letterbox.on .bar { height: 11vh; }
+  #replay-tag {
+    position: absolute; top: calc(11vh + 14px); left: 22px;
+    font-weight: 900; font-size: 18px; letter-spacing: 0.12em; color: #ff5470;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.6); opacity: 0;
+  }
+  #letterbox.on #replay-tag { opacity: 1; animation: recblink 1s steps(2) infinite; }
+  @keyframes recblink { 50% { opacity: 0.25; } }
+
+  /* ---------- transition wipe ---------- */
+  #wipe { z-index: 60; background: var(--ink); transform: scaleY(0); transform-origin: 50% 0%; transition: transform 0.35s cubic-bezier(0.7,0,0.3,1); }
+  #wipe.on { transform: scaleY(1); }
+
+  /* vignette + subtle grade */
+  #vignette { z-index: 5; background: radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(6,22,36,0.42) 100%); }
+
+  /* flash */
+  #flash { z-index: 28; opacity: 0; background: #fff; transition: opacity 0.25s ease-out; }
+
+  #muter { position: fixed; top: 12px; left: 12px; z-index: 50; font-size: 20px; background: rgba(10,42,61,0.6);
+    border: 2px solid rgba(253,246,227,0.3); color: var(--paper); width: 42px; height: 42px; border-radius: 50%;
+    cursor: pointer; pointer-events: auto; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="vignette" class="layer"></div>
+<div id="flash" class="layer"></div>
+<div id="popups" class="layer"></div>
+<div id="banner"></div>
+
+<!-- race HUD -->
+<div id="race-hud" class="layer hidden">
+  <div id="hud-top">
+    <span id="hud-hole">HOLE 1/3</span>
+    <span class="divider"></span>
+    <span id="hud-throws">THROWS 0</span>
+    <span class="divider"></span>
+    <span id="hud-timer">1:15</span>
+  </div>
+  <div id="scoreboard"></div>
+  <canvas id="minimap" width="190" height="190"></canvas>
+  <div id="throw-ui">
+    <div id="throw-hint">drag back &amp; release to skip</div>
+    <div id="mode-toggle">
+      <button id="mode-skip" class="sel">🪨 Skip</button>
+      <button id="mode-splash">💥 Splash</button>
+    </div>
+  </div>
+</div>
+
+<!-- fishing -->
+<div id="fishing-ui" class="layer hidden">
+  <div id="fishing-title">ROCK OVERBOARD!</div>
+  <div id="fishing-bar-wrap">
+    <div id="fishing-zone"></div>
+    <div id="fishing-cursor"></div>
+  </div>
+  <div id="fishing-hint">CLICK when the line crosses the gold zone!</div>
+  <div id="fishing-catches">🎣</div>
+</div>
+
+<!-- find / shape / paint shared chrome -->
+<div id="phase-ui" class="layer hidden">
+  <div id="phase-title">FIND YOUR ROCK</div>
+  <div id="phase-hint">click a rock to size it up</div>
+  <div id="phase-bottom">
+    <div id="rock-stats" class="hidden">
+      <div class="stat flat"><label>FLAT</label><div class="bar"><i id="stat-flat"></i></div></div>
+      <div class="stat heft"><label>HEFT</label><div class="bar"><i id="stat-heft"></i></div></div>
+      <div class="stat grit"><label>GRIT</label><div class="bar"><i id="stat-grit"></i></div></div>
+    </div>
+    <div id="paint-ui" class="hidden">
+      <div class="swatch-row" id="swatches"></div>
+      <div class="swatch-row" id="patterns"></div>
+    </div>
+    <button id="phase-next" class="btn small hidden">Next →</button>
+  </div>
+</div>
+
+<!-- title -->
+<div id="title-screen" class="layer">
+  <div class="bigtitle">SKIMMERS</div>
+  <div class="sub">the rock-skipping race &nbsp;·&nbsp; first stone to the flag</div>
+  <button id="play-btn" class="btn">Skip it!</button>
+</div>
+
+<!-- results -->
+<div id="results-ui" class="layer hidden">
+  <div class="bigtitle" style="font-size: clamp(36px,7vw,80px);" id="results-title">RESULTS</div>
+  <div id="results-list"></div>
+  <button id="again-btn" class="btn blue">Play again</button>
+</div>
+
+<div id="letterbox" class="layer">
+  <div class="bar top"></div>
+  <div class="bar bot"></div>
+  <div id="replay-tag">📼 INSTANT REPLAY</div>
+</div>
+
+<button id="muter" title="mute">🔊</button>
+<div id="wipe" class="layer"></div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+</script>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
