@@ -133,12 +133,21 @@ export class Fishing {
       g.add(shaft);
     }
 
-    // the line + hook
-    this.lineMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.025, 0.025, 1, 5),
-      new THREE.MeshBasicMaterial({ color: 0xeeeeee })
-    );
-    g.add(this.lineMesh);
+    // the line: a verlet rope — free middle points under gravity, pinned to
+    // the rod tip and the hook, so fast steering whips it into S-curves
+    this.ropeN = 12;
+    this.ropePts = [];
+    for (let i = 0; i < this.ropeN; i++) this.ropePts.push({ x: 0, y: 0, px: 0, py: 0 });
+    this.ropeGroup = new THREE.Group();
+    const ropeMat = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
+    this.ropeSegs = [];
+    for (let i = 0; i < this.ropeN - 1; i++) {
+      const seg = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1, 5), ropeMat);
+      this.ropeGroup.add(seg);
+      this.ropeSegs.push(seg);
+    }
+    g.add(this.ropeGroup);
+    this.lineMesh = this.ropeGroup; // visibility toggles reuse this handle
     this.hook = new THREE.Group();
     const hookMat = new THREE.MeshStandardMaterial({ color: 0xd8dde0, flatShading: true, metalness: 0.4 });
     const curve = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.07, 6, 12, Math.PI * 1.4), hookMat);
@@ -179,18 +188,22 @@ export class Fishing {
     this.onDone = onDone;
     this.rock = rock;
     this.hits = 0;
-    this.phase = "drop"; // drop -> reel
+    this.phase = "fall"; // fall -> drop -> reel
     this.depth = lakeDepthAt(spot.x, spot.z);
     this.floorY = -this.depth;
     this.hookStart = Math.max(2.4, this.depth - 1.1); // local: just under the surface
     this.group.position.set(spot.x, this.floorY, spot.z);
     this.group.visible = true;
 
-    // rock waits on the bed, eyes up
+    // your stone tumbles down from the surface first; the line comes after
     this._rockSaved = { parent: rock.group.parent, pos: rock.group.position.clone(), rot: rock.group.rotation.clone() };
-    rock.group.position.set(spot.x, this.floorY + ROCK_Y, spot.z);
+    this.fallY = this.depth - 0.7; // local, just under the surface
+    this.fallPhase = Math.random() * 10;
+    rock.group.position.set(spot.x, this.floorY + this.fallY, spot.z);
     rock.group.rotation.set(0, Math.random() * Math.PI * 2, 0);
     rock.kickEyes(1.5);
+    this.hook.visible = false;
+    this.lineMesh.visible = false;
 
     this.hookX = 0;
     this.hookY = this.hookStart;
@@ -266,6 +279,49 @@ export class Fishing {
       f.mesh.rotation.z = Math.sin(elapsed * 6 + f.phase) * 0.08;
     }
 
+    // ---- intro: the stone rocks gently down to the bed, then the line drops in
+    if (this.phase === "fall") {
+      const fallSpeed = Math.max(2, this.depth / 2.4);
+      this.fallY = Math.max(ROCK_Y, this.fallY - fallSpeed * dt);
+      const wp = this.group.position;
+      this.rock.group.position.set(
+        wp.x + Math.sin(elapsed * 2.1 + this.fallPhase) * 0.35,
+        this.floorY + this.fallY,
+        wp.z
+      );
+      this.rock.group.rotation.x += dt * 0.9;
+      this.rock.group.rotation.y += dt * 0.5;
+      if (Math.random() < 0.35) {
+        this.particles.glow.emit(
+          this.rock.group.position.x, this.rock.group.position.y + 0.3, this.rock.group.position.z,
+          (Math.random() - 0.5) * 0.4, 1 + Math.random(), (Math.random() - 0.5) * 0.4,
+          0.8 + Math.random() * 0.6, 2 + Math.random() * 2, 0.65, 0.85, 1.0, -1.2, 0.5
+        );
+      }
+      if (this.fallY <= ROCK_Y) {
+        this.phase = "drop";
+        this.rock.group.position.set(wp.x, this.floorY + ROCK_Y, wp.z);
+        this.rock.group.rotation.set(0, this.rock.group.rotation.y, 0);
+        this.rock.squashKick?.(0.8);
+        this.rock.kickEyes(1.2);
+        this.hook.visible = true;
+        this.lineMesh.visible = true;
+        this.hookY = this.hookStart;
+        this._tickY = this.hookStart;
+        // lay the rope straight down before the verlet sim takes over
+        const topY = this.depth + 6, botY = this.hookStart + 0.45;
+        this.ropePts.forEach((p, i) => {
+          const t = i / (this.ropeN - 1);
+          p.x = p.px = 0;
+          p.y = p.py = topY + (botY - topY) * t;
+        });
+        audio.settle();
+        // a puff of sand where it lands
+        this.particles.grindChips(this.rock.group.position);
+      }
+      return;
+    }
+
     // ---- fake pendulum: steering drags the hook, the line lags and swings
     const steerVel = (this.hookX - this.prevHookX) / Math.max(dt, 1e-4);
     this.prevHookX = this.hookX;
@@ -332,19 +388,64 @@ export class Fishing {
       if (this.hookY >= this.hookStart + 2.5) this._finish(this.hits === 0);
     }
 
-    // hook + line transforms: the line hangs from a lazily-following anchor
-    // and tilts to meet the swinging hook, so the whole rig reads as rope
+    // hook transform + verlet rope between the rod tip and the hook
     this.anchorX += (dispX * 0.85 - this.anchorX) * Math.min(1, 3.2 * dt);
     this.hook.position.set(dispX, this.hookY, 0);
     this.hook.rotation.z = this.swingAng * 1.25;
-    const lineTop = this.depth + 6; // anchor floats above the surface
-    const hookTopY = this.hookY + 0.45;
-    const ldx = dispX - this.anchorX;
-    const ldy = lineTop - hookTopY;
-    const lineLen = Math.hypot(ldx, ldy);
-    this.lineMesh.scale.y = lineLen;
-    this.lineMesh.position.set((this.anchorX + dispX) / 2, (lineTop + hookTopY) / 2, 0);
-    this.lineMesh.rotation.z = Math.atan2(ldx, ldy);
+    this._updateRope(Math.min(dt, 1 / 30), dispX);
+  }
+
+  _updateRope(dt, dispX) {
+    const pts = this.ropePts;
+    const n = this.ropeN;
+    const topX = this.anchorX, topY = this.depth + 6; // rod tip above the surface
+    const botX = dispX, botY = this.hookY + 0.45;
+
+    // verlet integrate the free middle points (gravity + inertia)
+    for (let i = 1; i < n - 1; i++) {
+      const p = pts[i];
+      const vx = (p.x - p.px) * 0.985;
+      const vy = (p.y - p.py) * 0.985;
+      p.px = p.x;
+      p.py = p.y;
+      p.x += vx;
+      p.y += vy - 22 * dt * dt;
+    }
+    // pins
+    pts[0].x = topX; pts[0].y = topY;
+    pts[n - 1].x = botX; pts[n - 1].y = botY;
+
+    // distance constraints, slight slack so the rope sags and whips
+    const segLen = (Math.hypot(botX - topX, botY - topY) / (n - 1)) * 1.04;
+    for (let iter = 0; iter < 4; iter++) {
+      for (let i = 0; i < n - 1; i++) {
+        const a = pts[i], b = pts[i + 1];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const d = Math.hypot(dx, dy) || 1e-5;
+        const diff = (d - segLen) / d;
+        const aPinned = i === 0, bPinned = i + 1 === n - 1;
+        if (aPinned && bPinned) continue;
+        if (aPinned) { b.x -= dx * diff; b.y -= dy * diff; }
+        else if (bPinned) { a.x += dx * diff; a.y += dy * diff; }
+        else {
+          a.x += dx * diff * 0.5; a.y += dy * diff * 0.5;
+          b.x -= dx * diff * 0.5; b.y -= dy * diff * 0.5;
+        }
+      }
+      pts[0].x = topX; pts[0].y = topY;
+      pts[n - 1].x = botX; pts[n - 1].y = botY;
+    }
+
+    // lay the segment cylinders along the points
+    for (let i = 0; i < n - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.max(0.02, Math.hypot(dx, dy));
+      const seg = this.ropeSegs[i];
+      seg.scale.y = len;
+      seg.position.set((a.x + b.x) / 2, (a.y + b.y) / 2, 0);
+      seg.rotation.z = Math.atan2(dx, dy);
+    }
   }
 
   _finish(clean) {

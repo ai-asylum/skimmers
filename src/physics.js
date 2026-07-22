@@ -9,7 +9,7 @@
  * aiming preview, so the dots never lie.
  */
 import * as THREE from "three";
-import { LAKE_R, WATER_Y } from "./water.js";
+import { LAKE_R, WATER_Y, lakeDepthAt } from "./water.js";
 
 export const GRAVITY = 14;
 export const MAX_SPEED = 27;
@@ -238,9 +238,19 @@ export class Skimmer {
 
       case "sinking": {
         this.sinkT += dt;
-        this.pos.y -= dt * (1.2 + this.rock.heft * 1.6);
+        const bed = -lakeDepthAt(this.pos.x, this.pos.z) + 0.4;
+        this.pos.y = Math.max(bed, this.pos.y - dt * (1.2 + this.rock.heft * 1.6));
         this.vel.multiplyScalar(1 - 2.5 * dt);
-        this.pos.addScaledVector(this.vel, dt);
+        this.pos.x += this.vel.x * dt;
+        this.pos.z += this.vel.z * dt;
+        break;
+      }
+
+      case "fishing": {
+        // keep drifting down until the stone rests on the lake bed — visible
+        // to anyone who dives nearby
+        const bed = -lakeDepthAt(this.pos.x, this.pos.z) + 0.4;
+        if (this.pos.y > bed) this.pos.y = Math.max(bed, this.pos.y - dt * 1.6);
         break;
       }
 
@@ -268,6 +278,9 @@ export class Skimmer {
       m.rotation.y += dt * 0.15;
     } else if (this.state === "sinking") {
       m.rotation.x += dt * 2.2;
+    } else if (this.state === "fishing") {
+      m.rotation.x += dt * 0.5;
+      m.rotation.y += dt * 0.3;
     }
     this.rock.update(dt);
   }

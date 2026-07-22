@@ -5,7 +5,7 @@
  * Lighting per the mood-lighting-rig scrap: warm key, cool fill, low ambient.
  */
 import * as THREE from "three";
-import { LAKE_R, WATER_Y } from "./water.js";
+import { LAKE_R, WATER_Y, lakeDepthAt } from "./water.js";
 
 const INK = 0x16324a;
 
@@ -449,6 +449,15 @@ export class CourseMarkers {
     const moss = new THREE.MeshStandardMaterial({ color: 0x5da24e, flatShading: true });
     for (const o of rocks) {
       const g = new THREE.Group();
+      // submerged root — the spire continues down to the lake bed, so the
+      // underwater fishing view shows solid rock, not a floating island
+      const depth = lakeDepthAt(o.x, o.z);
+      const root = new THREE.Mesh(
+        new THREE.CylinderGeometry(o.r * 0.72, o.r * 0.95, depth + 1.2, 8),
+        stoneDark
+      );
+      root.position.y = -(depth + 1.2) / 2 + 0.4;
+      g.add(root);
       // main spire — jagged, tall, unmistakably "not through here"
       const spire = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), stone);
       spire.scale.set(o.r * 0.8, o.h * 0.62, o.r * 0.72);

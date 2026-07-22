@@ -19,7 +19,7 @@ import { Particles } from "./particles.js";
 import { Water, WATER_Y, LAKE_R } from "./water.js";
 import { World, shoreHeight } from "./world.js";
 import { Boats } from "./boats.js";
-import { Rock, ROCK_COLORS, ROCK_PATTERNS, rockName, randomBotRock } from "./rock.js";
+import { Rock, ROCK_COLORS, ROCK_PATTERNS, rockName, randomBotRock, setEyeTarget } from "./rock.js";
 import { Skimmer, simulateThrow, BLAST_R } from "./physics.js";
 import { BotBrain, BOT_PERSONAS } from "./bots.js";
 import { Fishing } from "./fishing.js";
@@ -138,8 +138,29 @@ const G = {
   slowmoUsed: false,
   aimDir: new THREE.Vector3(0, 0, -1), // camera-following aim direction
   paintDrag: { mode: null, lastX: 0, lastY: 0, spinVel: 0 }, // paint-phase grab & spin
+  raceTape: [], // rolling frames of EVERY racer's transform, for the killcam
+  raceTapeEvents: [], // { frame, type, x, y, z, who } splashes etc, re-fired in replay
   effects: [], // { t, fn } delayed one-shots on game time
 };
+const TAPE_MAX = 200; // ~3.3s of full-scene replay
+
+function recordTapeFrame() {
+  const n = G.racers.length;
+  const frame = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    const m = G.racers[i].mesh;
+    frame[i * 4] = m.position.x;
+    frame[i * 4 + 1] = m.position.y;
+    frame[i * 4 + 2] = m.position.z;
+    frame[i * 4 + 3] = m.rotation.y;
+  }
+  G.raceTape.push(frame);
+  if (G.raceTape.length > TAPE_MAX) {
+    G.raceTape.shift();
+    for (const e of G.raceTapeEvents) e.frame--;
+    G.raceTapeEvents = G.raceTapeEvents.filter((e) => e.frame >= 0);
+  }
+}
 
 /** point the aim (and thus the camera) from the player's lie toward the flag */
 function resetAim() {
@@ -1034,6 +1055,8 @@ function setupHole(idx) {
   G.holeTime = HOLES[idx].time;
   G.holeWinner = null;
   G.slowmoUsed = false;
+  G.raceTape = [];
+  G.raceTapeEvents = [];
   const tee = holeTee(idx), flag = holeFlag(idx);
   world.flag.setPosition(flag.x, flag.z);
   world.course.setHole(HOLES[idx].path, HOLES[idx].islands, HOLES[idx].rocks);
@@ -1080,6 +1103,15 @@ function onSkimmerEvent(type, data) {
 
   // networked play: relay events for every skimmer we own (self + host's bots)
   if (NET.mode !== "solo" && NET.started && !s.isRemote) netSendEvent(s, type, data);
+
+  // log splashy moments onto the race tape so the killcam can re-fire them
+  if (G.state === "race" && !G.replay && G.raceTape.length) {
+    if (type === "skip" || type === "boing" || type === "blast" || type === "sink") {
+      G.raceTapeEvents.push({ frame: G.raceTape.length - 1, type, x: data.at.x, y: data.at.y, z: data.at.z });
+    } else if (type === "throw") {
+      G.raceTapeEvents.push({ frame: G.raceTape.length - 1, type, who: s });
+    }
+  }
 
   switch (type) {
     case "skip": {
@@ -1301,7 +1333,7 @@ function holeWon(s) {
   cam.look.set(flag.x, 1.5, flag.z);
 
   if (fishing.active) fishing.cancel();
-  if (s.tape && s.tape.length >= 40) after(2.0, () => startReplay(s));
+  if (G.raceTape.length >= 40) after(2.0, () => startReplay(s));
   else after(3.2, nextHoleOrResults);
 }
 
@@ -1311,18 +1343,31 @@ function holeWon(s) {
 const letterboxEl = document.getElementById("letterbox");
 
 function startReplay(s) {
-  const tape = s.tape.slice();
-  const skips = new Set(s.tapeSkips);
-  const first = tape[0], lastF = tape[tape.length - 1];
-  const dir = new THREE.Vector3(lastF.x - first.x, 0, lastF.z - first.z);
+  // full-scene replay: every racer's transform comes off the rolling race
+  // tape, starting at the winner's final throw
+  const racers = [...G.racers];
+  const wIdx = racers.indexOf(s);
+  let startIdx = 0;
+  for (let i = G.raceTapeEvents.length - 1; i >= 0; i--) {
+    const e = G.raceTapeEvents[i];
+    if (e.type === "throw" && e.who === s) { startIdx = e.frame; break; }
+  }
+  const frames = G.raceTape.slice(Math.max(0, startIdx));
+  if (frames.length < 30 || wIdx < 0 || frames[0].length < racers.length * 4) {
+    after(1.2, nextHoleOrResults);
+    return;
+  }
+  const events = G.raceTapeEvents
+    .filter((e) => e.frame >= startIdx && e.type !== "throw")
+    .map((e) => ({ ...e, frame: e.frame - startIdx }));
+  const f0 = frames[0], fl = frames[frames.length - 1];
+  const dir = new THREE.Vector3(fl[wIdx * 4] - f0[wIdx * 4], 0, fl[wIdx * 4 + 2] - f0[wIdx * 4 + 2]);
   if (dir.lengthSq() < 0.01) dir.set(1, 0, 0);
   dir.normalize();
   G.replay = {
-    active: true, skimmer: s, tape, skips, i: 0, speed: 0.55,
+    active: true, skimmer: s, racers, wIdx, frames, events, i: 0, speed: 0.55,
     side: new THREE.Vector3(-dir.z, 0, dir.x),
-    savedPos: s.mesh.position.clone(),
-    savedRotY: s.mesh.rotation.y,
-    pos: new THREE.Vector3(first.x, first.y, first.z),
+    pos: new THREE.Vector3(f0[wIdx * 4], f0[wIdx * 4 + 1], f0[wIdx * 4 + 2]),
   };
   letterboxEl.classList.add("on");
   ui.els.raceHud.classList.add("hidden"); // clean cinematic frame
@@ -1337,33 +1382,48 @@ function updateReplay(dt) {
   const prev = Math.floor(r.i);
   r.i += dt * 60 * r.speed;
   const idx = Math.floor(r.i);
-  // re-fire recorded skip splashes we passed this frame
-  for (let k = prev + 1; k <= Math.min(idx, r.tape.length - 1); k++) {
-    if (r.skips.has(k)) {
-      const f = r.tape[k];
-      const f2 = r.tape[Math.min(k + 3, r.tape.length - 1)];
-      particles.skipSplash(
-        new THREE.Vector3(f.x, f.y, f.z),
-        new THREE.Vector3((f2.x - f.x) * 20, 0, (f2.z - f.z) * 20),
-        0.8
-      );
-      audio.skip(3, 0.7);
+  // re-fire the splashy moments we passed this frame
+  for (const e of r.events) {
+    if (e.frame > prev && e.frame <= Math.min(idx, r.frames.length - 1)) {
+      const at = new THREE.Vector3(e.x, e.y, e.z);
+      if (e.type === "skip" || e.type === "boing") {
+        particles.skipSplash(at, new THREE.Vector3(0, 0, 0.01), 0.8);
+        audio.skip(3, 0.7);
+      } else if (e.type === "blast") {
+        particles.blast(at);
+        audio.blast();
+      } else if (e.type === "sink") {
+        particles.sinkSplash(at, 1);
+        audio.sink();
+      }
     }
   }
-  if (idx >= r.tape.length - 1) { endReplay(); return; }
-  const f0 = r.tape[idx], f1 = r.tape[idx + 1];
+  if (idx >= r.frames.length - 1) { endReplay(); return; }
+  const fa = r.frames[idx], fb = r.frames[idx + 1];
   const t = r.i - idx;
-  r.pos.set(lerp(f0.x, f1.x, t), lerp(f0.y, f1.y, t), lerp(f0.z, f1.z, t));
-  const m = r.skimmer.mesh;
-  m.position.copy(r.pos);
-  m.rotation.y = lerp(f0.ry, f1.ry, t);
+  // every rock plays back, not just the winner's
+  r.racers.forEach((s, ri) => {
+    if (ri * 4 + 3 >= fa.length || ri * 4 + 3 >= fb.length) return; // roster changed mid-tape
+    const m = s.mesh;
+    m.position.set(
+      lerp(fa[ri * 4], fb[ri * 4], t),
+      lerp(fa[ri * 4 + 1], fb[ri * 4 + 1], t),
+      lerp(fa[ri * 4 + 2], fb[ri * 4 + 2], t)
+    );
+    m.rotation.y = lerp(fa[ri * 4 + 3], fb[ri * 4 + 3], t);
+  });
+  r.pos.set(
+    lerp(fa[r.wIdx * 4], fb[r.wIdx * 4], t),
+    lerp(fa[r.wIdx * 4 + 1], fb[r.wIdx * 4 + 1], t),
+    lerp(fa[r.wIdx * 4 + 2], fb[r.wIdx * 4 + 2], t)
+  );
 }
 
 function endReplay() {
   const r = G.replay;
   if (!r) return;
-  r.skimmer.mesh.position.copy(r.savedPos);
-  r.skimmer.mesh.rotation.y = r.savedRotY;
+  // hand every mesh back to the live sim
+  for (const s of r.racers) s.mesh.position.copy(s.pos);
   G.replay = null;
   letterboxEl.classList.remove("on");
   if (G.state === "race") ui.els.raceHud.classList.remove("hidden");
@@ -1488,7 +1548,7 @@ function updateRace(dt) {
 
   // physics for everyone (remote stones interpolate toward their snapshots)
   for (const s of G.racers) {
-    if (G.replay?.active && s === G.replay.skimmer) continue; // killcam owns this mesh
+    if (G.replay?.active) break; // the killcam tape owns every mesh right now
     if (s.isRemote) {
       if (s.netTarget) {
         s.pos.x = damp(s.pos.x, s.netTarget[0], 12, dt);
@@ -1569,6 +1629,9 @@ function updateRace(dt) {
     }
   }
 
+  // roll the full-scene killcam tape
+  if (!G.replay) recordTapeFrame();
+
   // HUD
   ui.setHud(G.hole + 1, HOLES.length, p.throws, G.holeTime);
   minimapTick(dt);
@@ -1639,6 +1702,8 @@ function frame(now) {
 
   camUpdate(rawDt); // camera on real time so slow-mo still feels smooth
   applyShake(shakeRig, rawDt, G.elapsed);
+  camera.getWorldPosition(_wsPos);
+  setEyeTarget(_wsPos); // googly pupils track the camera
 
   // submerged? dark-blue grade + wobble filter on the canvas
   const under = camRig.position.y < -0.15;
