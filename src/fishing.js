@@ -7,10 +7,9 @@
  */
 import * as THREE from "three";
 import { audio } from "./audio.js";
+import { lakeDepthAt } from "./water.js";
 import { els } from "./ui.js";
 
-const FLOOR_Y = -14; // world y of the lake bed diorama
-const HOOK_START = 10.5; // local y above the floor where the hook starts
 const ROCK_Y = 0.55; // local y of the rock on the bed
 const HOOK_SPEED = 2.0;
 const STEER_RANGE = 8.5;
@@ -172,44 +171,63 @@ export class Fishing {
     this._tickY = 0;
   }
 
-  /** dive in: place the diorama under the sink spot and hand over the rock */
+  /** dive in: the lake bed is a bowl — the diorama floor sits at the real
+   *  depth under the sink spot, so shoreline dives are quick grabs and
+   *  mid-lake sinks are a long, fishy descent */
   start(spot, rock, onDone) {
     this.active = true;
     this.onDone = onDone;
     this.rock = rock;
     this.hits = 0;
     this.phase = "drop"; // drop -> reel
-    this.group.position.set(spot.x, FLOOR_Y, spot.z);
+    this.depth = lakeDepthAt(spot.x, spot.z);
+    this.floorY = -this.depth;
+    this.hookStart = Math.max(2.4, this.depth - 1.1); // local: just under the surface
+    this.group.position.set(spot.x, this.floorY, spot.z);
     this.group.visible = true;
 
     // rock waits on the bed, eyes up
     this._rockSaved = { parent: rock.group.parent, pos: rock.group.position.clone(), rot: rock.group.rotation.clone() };
-    rock.group.position.set(spot.x, FLOOR_Y + ROCK_Y, spot.z);
+    rock.group.position.set(spot.x, this.floorY + ROCK_Y, spot.z);
     rock.group.rotation.set(0, Math.random() * Math.PI * 2, 0);
     rock.kickEyes(1.5);
 
     this.hookX = 0;
-    this.hookY = HOOK_START;
+    this.hookY = this.hookStart;
+    this._tickY = this.hookStart;
     this.swingAng = 0;
     this.swingVel = 0;
     this.anchorX = 0;
     this.prevHookX = 0;
-    for (const f of this.fish) {
-      f.mesh.position.set((Math.random() - 0.5) * f.xr * 2, f.y, (Math.random() - 0.5) * 1.2);
+
+    // deeper water = more fish in the gauntlet, lanes squeezed to the depth
+    const active = Math.max(2, Math.min(this.fish.length, Math.round(this.depth / 2.2)));
+    const laneLo = ROCK_Y + 1.15;
+    const laneHi = Math.max(laneLo + 0.8, this.hookStart - 0.6);
+    this.fish.forEach((f, i) => {
+      if (i < active) {
+        f.y = laneLo + ((i + 0.5) / active) * (laneHi - laneLo);
+        f.mesh.visible = true;
+        f.mesh.position.set((Math.random() - 0.5) * f.xr * 2, f.y, (Math.random() - 0.5) * 1.2);
+      } else {
+        f.mesh.visible = false;
+        f.mesh.position.set(999, -999, 0);
+      }
       f.scare = 0;
-    }
+    });
 
     this.el.classList.remove("hidden");
     els.throwUi.classList.add("hidden");
     this.catchesEl.textContent = "";
   }
 
-  /** camera pose for main's "fishing" mode — aquarium side view */
+  /** camera pose for main's "fishing" mode — aquarium side view, framed to depth */
   getCamPose() {
     const p = this.group.position;
+    const d = this.depth ?? 10;
     return {
-      pos: new THREE.Vector3(p.x, FLOOR_Y + 6.2, p.z + 13.5),
-      look: new THREE.Vector3(p.x, FLOOR_Y + 5.2, p.z),
+      pos: new THREE.Vector3(p.x, this.floorY + d * 0.42 + 1.2, p.z + 7.5 + d * 0.55),
+      look: new THREE.Vector3(p.x, this.floorY + d * 0.38, p.z),
     };
   }
 
@@ -228,7 +246,7 @@ export class Fishing {
       this._bubbleT = 0.3 + Math.random() * 0.5;
       const p = this.group.position;
       this.particles.glow.emit(
-        p.x + (Math.random() - 0.5) * 14, FLOOR_Y + 0.5 + Math.random() * 3, p.z + (Math.random() - 0.5) * 4,
+        p.x + (Math.random() - 0.5) * 14, this.floorY + 0.5 + Math.random() * 3, p.z + (Math.random() - 0.5) * 4,
         0, 1.2 + Math.random(), 0, 1.5 + Math.random(), 2 + Math.random() * 2,
         0.65, 0.85, 1.0, -1.2, 0.4
       );
@@ -271,7 +289,7 @@ export class Fishing {
         const dy = f.mesh.position.y - this.hookY;
         if (Math.abs(dx) < 0.85 && Math.abs(dy) < 0.5) {
           this.hits++;
-          this.hookY = Math.min(HOOK_START, this.hookY + 2.7);
+          this.hookY = Math.min(this.hookStart, this.hookY + 2.7);
           this._tickY = this.hookY;
           f.scare = 1.4;
           f.speed = Math.abs(f.speed) * Math.sign(dx || 1); // dart away from the hook
@@ -280,7 +298,7 @@ export class Fishing {
           this.rock.kickEyes(1);
           this.catchesEl.textContent = `fish bumps: ${this.hits}`;
           const wp = this.group.position;
-          this.particles.glow.emit(wp.x + dispX, FLOOR_Y + this.hookY, wp.z, dx * 2, 1, 0,
+          this.particles.glow.emit(wp.x + dispX, this.floorY + this.hookY, wp.z, dx * 2, 1, 0,
             0.4, 5, 1.0, 0.6, 0.3, 2, 1);
         }
       }
@@ -301,7 +319,7 @@ export class Fishing {
       this.hookX *= 1 - Math.min(1, 6 * dt);
       this.rock.group.position.set(
         this.group.position.x + dispX,
-        FLOOR_Y + this.hookY - 0.5,
+        this.floorY + this.hookY - 0.5,
         this.group.position.z
       );
       this.rock.group.rotation.z = this.swingAng * 0.6 + Math.sin(this.hookY * 2) * 0.1;
@@ -311,7 +329,7 @@ export class Fishing {
           (Math.random() - 0.5), 1.5, (Math.random() - 0.5), 0.6, 2.5, 0.7, 0.9, 1.0, -1, 0.6
         );
       }
-      if (this.hookY >= HOOK_START + 3) this._finish(this.hits === 0);
+      if (this.hookY >= this.hookStart + 2.5) this._finish(this.hits === 0);
     }
 
     // hook + line transforms: the line hangs from a lazily-following anchor
@@ -319,7 +337,7 @@ export class Fishing {
     this.anchorX += (dispX * 0.85 - this.anchorX) * Math.min(1, 3.2 * dt);
     this.hook.position.set(dispX, this.hookY, 0);
     this.hook.rotation.z = this.swingAng * 1.25;
-    const lineTop = HOOK_START + 14;
+    const lineTop = this.depth + 6; // anchor floats above the surface
     const hookTopY = this.hookY + 0.45;
     const ldx = dispX - this.anchorX;
     const ldy = lineTop - hookTopY;

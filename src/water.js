@@ -8,6 +8,12 @@ import * as THREE from "three";
 export const WATER_Y = 0;
 export const LAKE_R = 64; // water becomes shore past this radius
 
+/** lake-bed depth below the surface — a bowl: shallow at the shore, deep mid-lake */
+export function lakeDepthAt(x, z) {
+  const r = Math.min(1, Math.hypot(x, z) / LAKE_R);
+  return 4 + 9.5 * (1 - r * r);
+}
+
 export class Water {
   constructor(scene) {
     const geo = new THREE.PlaneGeometry(LAKE_R * 2.6, LAKE_R * 2.6, 96, 96);

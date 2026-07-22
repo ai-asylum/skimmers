@@ -7,6 +7,7 @@
  */
 import * as THREE from "three";
 import { simulateThrow } from "./physics.js";
+import { lakeDepthAt } from "./water.js";
 
 export const BOT_PERSONAS = [
   { name: "Granite Gary", color: "#e0503a", skill: 0.86, aggro: 0.35, patience: [2.6, 4.2] },
@@ -36,7 +37,8 @@ export class BotBrain {
     // auto-fishing: bots take a skill-scaled break to reel their rock back
     if (s.state === "sinking" && s.sinkT > 0.8 && !this.fishAt) {
       this.fishAt = s.pos.clone();
-      this.fishT = 2.8 + (1 - this.p.skill) * 3 + Math.random() * 1.5;
+      // the lake bed is a bowl — deep mid-lake sinks cost more time, same as the player
+      this.fishT = 1.4 + lakeDepthAt(s.pos.x, s.pos.z) * 0.35 + (1 - this.p.skill) * 2.5 + Math.random() * 1.2;
       s.state = "fishing";
     }
     if (s.state === "fishing") {
