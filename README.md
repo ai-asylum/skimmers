@@ -48,6 +48,10 @@ the minimap. First stone inside the flag ring takes the hole; most holes wins.
 
 ![painting your rock](media/paint.png)
 
+Sink your stone and the camera follows it down:
+
+![underwater fishing](media/fishing.png)
+
 ## 🏃 Run it locally
 
 ```sh
