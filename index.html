@@ -121,28 +121,9 @@
   #hud-timer.low { color: var(--danger); animation: pulse 0.5s infinite alternate; }
   @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.15); } }
 
-  /* scoreboard */
-  #scoreboard {
-    position: absolute; top: 70px; right: 12px; display: flex; flex-direction: column; gap: 4px;
-    font-size: 12px; font-weight: 700;
-  }
-  .score-row {
-    display: flex; align-items: center; gap: 8px;
-    background: rgba(10,42,61,0.65); color: var(--paper);
-    padding: 4px 10px 4px 6px; border-radius: 20px;
-    border: 2px solid transparent;
-    transition: transform 0.2s ease, border-color 0.2s;
-  }
-  .score-row.me { border-color: var(--gold); }
-  .score-row.fishing { opacity: 0.6; }
-  .score-row .dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.7); flex: 0 0 16px; }
-  .score-row .name { min-width: 74px; }
-  .score-row .dist { color: var(--accent2); min-width: 40px; text-align: right; }
-  .score-row .holes { color: var(--gold); }
-
-  /* minimap */
+  /* minimap — lives top-right where the scoreboard used to be */
   #minimap {
-    position: absolute; left: 14px; bottom: 14px;
+    position: absolute; right: 14px; top: 64px;
     width: 152px; height: 152px;
     border-radius: 50%; border: 3px solid rgba(253,246,227,0.55);
     box-shadow: 0 6px 18px rgba(0,0,0,0.4);
@@ -323,7 +304,6 @@
     <span class="divider"></span>
     <span id="hud-timer">1:15</span>
   </div>
-  <div id="scoreboard"></div>
   <canvas id="minimap" width="190" height="190"></canvas>
   <div id="throw-ui">
     <div id="throw-hint">drag back &amp; release to skip</div>

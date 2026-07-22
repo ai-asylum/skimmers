@@ -1555,7 +1555,6 @@ function updateRace(dt) {
 
   // HUD
   ui.setHud(G.hole + 1, HOLES.length, p.throws, G.holeTime);
-  scoreboardTick(dt);
   minimapTick(dt);
 
   // gentle idle ripples around resting stones
@@ -1571,24 +1570,6 @@ function minimapTick(dt) {
   if (mmAccum < 0.08) return;
   minimap.update(mmAccum, G.racers, boats, G.player);
   mmAccum = 0;
-}
-
-let sbAccum = 0;
-function scoreboardTick(dt) {
-  sbAccum += dt;
-  if (sbAccum < 0.25) return;
-  sbAccum = 0;
-  const flag = currentFlagV3();
-  const rows = [...G.racers]
-    .map((s) => ({
-      name: s.name, color: s.tint, me: s.isPlayer,
-      dist: s.distToFlag(flag), holes: s.holesWon,
-      busy: s.state === "fishing" || s.state === "sinking",
-      finished: s.finished,
-      sort: s.finished ? -1 : s.distToFlag(flag),
-    }))
-    .sort((a, b) => a.sort - b.sort);
-  ui.renderScoreboard(rows);
 }
 
 // ------------------------------------------------------------------ main loop

@@ -10,7 +10,6 @@ export const els = {
   hole: $("hud-hole"),
   throws: $("hud-throws"),
   timer: $("hud-timer"),
-  scoreboard: $("scoreboard"),
   popups: $("popups"),
   banner: $("banner"),
   flash: $("flash"),
@@ -97,22 +96,6 @@ export function setHud(hole, totalHoles, throws, timeLeft) {
 
 export function setThrowHint(text) {
   els.throwHint.textContent = text;
-}
-
-// ---------------------------------------------------------------- scoreboard
-export function renderScoreboard(rows) {
-  // rows: { name, color, dist, holes, me, busy, finished }
-  els.scoreboard.innerHTML = "";
-  for (const r of rows) {
-    const div = document.createElement("div");
-    div.className = "score-row" + (r.me ? " me" : "") + (r.busy ? " fishing" : "");
-    div.innerHTML =
-      `<span class="dot" style="background:${r.color}"></span>` +
-      `<span class="name">${r.me ? "YOU · " : ""}${r.name}</span>` +
-      `<span class="holes">${"★".repeat(r.holes)}</span>` +
-      `<span class="dist">${r.finished ? "IN!" : r.busy ? "glub" : Math.round(r.dist) + "m"}</span>`;
-    els.scoreboard.appendChild(div);
-  }
 }
 
 // ---------------------------------------------------------------- phases
