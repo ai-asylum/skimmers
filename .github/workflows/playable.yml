@@ -26,6 +26,6 @@ concurrency:
 
 jobs:
   playable:
-    uses: ai-asylum/playable-kit/.github/workflows/playable-check.yml@v1
+    uses: ai-asylum/playable-kit/.github/workflows/playable-check.yml@v1.1
     permissions:
       contents: write
