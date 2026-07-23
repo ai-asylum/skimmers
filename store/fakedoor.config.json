@@ -1,0 +1,62 @@
+{
+  "slug": "skippidyskip",
+  "name": "Skippidy Skip",
+  "studio": "Skipstone Games",
+  "company": "Misaligned Games",
+  "email": "hello@misaligned.games",
+  "subtitle": "First stone to the flag wins",
+  "metaDescription": "Find a rock, grind it flat, paint it, then skip it across a lake full of rivals, boats, islands and ducks. First stone to the flag wins.",
+  "description": "Skippidy Skip is a chaotic online rock-skipping race. Find a stone on the beach, grind it flat, hand-paint it, then drag back and let it fly — flat, fast throws chain hop after hop across the lake. Chain five and your rock catches fire. Splash-lob rivals under the water and they have to fish their stone back while you pull ahead. Ferry across on boats, bank shots off hulls, and thread the giant rock spires guarding the flag. 2–8 players, ~3 minute matches. First stone inside the flag ring takes the hole; most holes wins.",
+  "tags": ["Arcade", "Racing", "Multiplayer", "Casual"],
+  "rating": "4.7",
+  "ratingFillPct": 94,
+  "ratingsCount": "1.2K",
+  "reviewsLabel": "1.2K reviews",
+  "reviewsCountLong": "1,209",
+  "downloads": "10K+",
+  "topChartLabel": "Top arcade",
+  "chartRank": "#18",
+  "chartCategory": "Arcade",
+  "contentRating": "7+",
+  "ageRating": "4+",
+  "language": "EN",
+  "languageLong": "English",
+  "category": "Games",
+  "sizeAndroid": "9 MB",
+  "sizeIos": "38 MB",
+  "copyrightYear": "2026",
+  "version": "1.0",
+  "whatsNew": "First release! Grind a flat one, chain your hops, and race friends to the flag. More lakes and hazards on the way.",
+  "legalUpdated": "23 July 2026",
+  "histogram": [80, 12, 4, 2, 2],
+  "screenshots": [
+    { "src": "./shots/01-race.webp", "alt": "Skippidy Skip — race across the lake to the flag" },
+    { "src": "./shots/02-chain-fire.webp", "alt": "Chain five hops and your rock catches fire" },
+    { "src": "./shots/03-paint.webp", "alt": "Hand-paint your stone before the race" }
+  ],
+  "reviews": [
+    { "initials": "TL", "author": "Theo L.", "fillPct": 100, "title": "One more throw", "when": "3d ago", "body": "The little plink when a skip chains is so satisfying. Splash-lobbed my mate under the water and never looked back." },
+    { "initials": "RN", "author": "Ravn N.", "fillPct": 80, "title": "Chaotic in the best way", "when": "6d ago", "body": "Bank shots off the boats shouldn't be this fun. Want more lakes!" }
+  ],
+  "survey": [
+    {
+      "q": "What made you tap?",
+      "key": "reason",
+      "options": [
+        { "v": "skip", "label": "The skipping physics" },
+        { "v": "race", "label": "Racing friends" },
+        { "v": "paint", "label": "Painting my rock" },
+        { "v": "curious", "label": "Just curious" }
+      ]
+    },
+    {
+      "q": "Pay to remove ads?",
+      "key": "pay",
+      "options": [
+        { "v": "yes", "label": "Yes" },
+        { "v": "maybe", "label": "Maybe" },
+        { "v": "no", "label": "Nope" }
+      ]
+    }
+  ]
+}

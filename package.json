@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && cp -r store dist/store",
     "build:playable": "node scripts/build-playable.mjs",
     "preview": "vite preview --port 8741",
     "start": "vite"

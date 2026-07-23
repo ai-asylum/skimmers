@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#ffffff" />
+<script>
+  // Device router: non-iOS visitors belong on the Play Store page.
+  // Override for testing with ?p=ios / ?p=android.
+  (function () {
+    var p = new URLSearchParams(location.search).get('p');
+    var ios = p ? p === 'ios'
+      : /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (!ios) location.replace('./' + location.search);
+  })();
+  window.__FAKEDOOR__ = { slug: "skippidyskip" };
+</script>
+<title>Skippidy Skip on the App Store</title>
+<meta name="description" content="Find a rock, grind it flat, paint it, then skip it across a lake full of rivals, boats, islands and ducks. First stone to the flag wins." />
+<link rel="stylesheet" href="./ios.css" />
+<link rel="icon" type="image/webp" href="./icon.webp" />
+<link rel="apple-touch-icon" href="./icon.webp" />
+</head>
+<body>
+<div class="wrap">
+
+  <header class="nav" id="nav">
+    <a class="back" href="#" aria-label="Back" onclick="return false">
+      <svg viewBox="0 0 12 21" aria-hidden="true"><path d="M10.5 1.5 2 10.5l8.5 9" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </a>
+    <div class="compact">
+      <img src="./icon.webp" alt="" />
+      <div class="nm" style="flex:1">Skippidy Skip</div>
+      <button class="get" data-install>Get</button>
+    </div>
+  </header>
+
+  <section class="head">
+    <img class="appicon" src="./icon.webp" alt="Skippidy Skip app icon" width="118" height="118" />
+    <div class="headinfo">
+      <h1>Skippidy Skip</h1>
+      <p class="sub">First stone to the flag wins</p>
+      <div class="actions">
+        <div>
+          <button class="get lg" data-install aria-label="Get Skippidy Skip">Get</button>
+          <p class="inapp">In-App Purchases</p>
+        </div>
+        <button class="share" aria-label="Share">
+          <svg viewBox="0 0 20 26" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path d="M10 2v15" stroke-linecap="round"/><path d="M5.5 6.5 10 2l4.5 4.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M5.5 10H3v14h14V10h-2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <div class="metrics" aria-label="App stats">
+    <div class="metric">
+      <div class="cap">1.2K Ratings</div>
+      <div class="big">4.7</div>
+      <div class="stars">★★★★★</div>
+    </div>
+    <div class="metric">
+      <div class="cap">Age</div>
+      <div class="age">4+</div>
+    </div>
+    <div class="metric">
+      <div class="cap">Chart</div>
+      <div class="big">#18</div>
+      <div class="cap" style="text-transform:none;color:var(--secondary)">Arcade</div>
+    </div>
+    <div class="metric">
+      <div class="cap">Developer</div>
+      <div class="big"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 1c-3 0-6 1.6-6 4v1h12v-1c0-2.4-3-4-6-4Z"/></svg></div>
+      <div class="cap" style="text-transform:none;color:var(--secondary)">Skipstone Games</div>
+    </div>
+    <div class="metric">
+      <div class="cap">Language</div>
+      <div class="big">EN</div>
+    </div>
+  </div>
+
+  <div class="shots" aria-label="Screenshots">
+      <div class="shot"><img src="./shots/01-race.webp" alt="Skippidy Skip — race across the lake to the flag" width="941" height="1672" loading="lazy" /></div>
+      <div class="shot"><img src="./shots/02-chain-fire.webp" alt="Chain five hops and your rock catches fire" width="941" height="1672" loading="lazy" /></div>
+      <div class="shot"><img src="./shots/03-paint.webp" alt="Hand-paint your stone before the race" width="941" height="1672" loading="lazy" /></div>
+  </div>
+
+  <section class="sec">
+    <p class="desc" id="desc">Skippidy Skip is a chaotic online rock-skipping race. Find a stone on the beach, grind it flat, hand-paint it, then drag back and let it fly — flat, fast throws chain hop after hop across the lake. Chain five and your rock catches fire. Splash-lob rivals under the water and they have to fish their stone back while you pull ahead. Ferry across on boats, bank shots off hulls, and thread the giant rock spires guarding the flag. 2–8 players, ~3 minute matches. First stone inside the flag ring takes the hole; most holes wins.</p>
+    <button class="morebtn" id="moreBtn">more</button>
+    <p class="devline">Skipstone Games ›</p>
+    <div class="tags"><span class="tag">Arcade</span><span class="tag">Racing</span><span class="tag">Multiplayer</span><span class="tag">Casual</span></div>
+  </section>
+
+  <section class="sec">
+    <div class="sechead"><h2>What’s New</h2><button class="seeall">Version History</button></div>
+    <div class="ver"><span>Version 1.0</span><span>New</span></div>
+    <p class="notes">First release! Grind a flat one, chain your hops, and race friends to the flag. More lakes and hazards on the way.</p>
+  </section>
+
+  <section class="sec">
+    <div class="sechead"><h2>Ratings &amp; Reviews</h2><button class="seeall">See All</button></div>
+    <div class="rrgrid">
+      <div><div class="num">4.7</div><div class="out">out of 5</div></div>
+      <div class="rrbars">
+        <div class="row"><span class="s">★★★★★</span><div class="track"><div class="fill" style="width:80%"></div></div></div>
+        <div class="row"><span class="s">★★★★</span><div class="track"><div class="fill" style="width:12%"></div></div></div>
+        <div class="row"><span class="s">★★★</span><div class="track"><div class="fill" style="width:4%"></div></div></div>
+        <div class="row"><span class="s">★★</span><div class="track"><div class="fill" style="width:2%"></div></div></div>
+        <div class="row"><span class="s">★</span><div class="track"><div class="fill" style="width:2%"></div></div></div>
+        <div class="rrcount">1.2K Ratings</div>
+      </div>
+    </div>
+    <div class="review">
+      <div class="rtop"><span class="ti">One more throw</span><span class="when">3d ago</span></div>
+      <div class="rs">★★★★★</div>
+      <p>The little plink when a skip chains is so satisfying. Splash-lobbed my mate under the water and never looked back.</p>
+      <div class="when" style="margin-top:8px">Theo L.</div>
+    </div>
+    <div class="review">
+      <div class="rtop"><span class="ti">Chaotic in the best way</span><span class="when">6d ago</span></div>
+      <div class="rs">★★★★</div>
+      <p>Bank shots off the boats shouldn't be this fun. Want more lakes!</p>
+      <div class="when" style="margin-top:8px">Ravn N.</div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="sechead"><h2>Information</h2></div>
+    <div class="info">
+      <div class="r"><span class="k">Seller</span><span class="v">Misaligned Games</span></div>
+      <div class="r"><span class="k">Size</span><span class="v">38 MB</span></div>
+      <div class="r"><span class="k">Category</span><span class="v">Games</span></div>
+      <div class="r"><span class="k">Compatibility</span><span class="v">iPhone, iPad</span></div>
+      <div class="r"><span class="k">Languages</span><span class="v">English</span></div>
+      <div class="r"><span class="k">Age Rating</span><span class="v">4+</span></div>
+      <div class="r"><span class="k">In-App Purchases</span><span class="v">Yes</span></div>
+      <div class="r"><span class="k">Copyright</span><span class="v">© 2026 Misaligned Games</span></div>
+      <div class="r"><span class="k">Price</span><span class="v">Free</span></div>
+      <div class="r"><span class="k">Privacy Policy</span><a class="v" href="./privacy.html" style="color:var(--blue);text-decoration:none">View ›</a></div>
+    </div>
+  </section>
+
+  <footer>
+    <p>© 2026 Misaligned Games. All rights reserved.</p>
+    <p><a href="mailto:hello@misaligned.games">hello@misaligned.games</a> · <a href="./privacy.html">Privacy</a> · <a href="./terms.html">Terms</a></p>
+    <p>Pre-launch preview. Not affiliated with or endorsed by Apple.</p>
+  </footer>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-label="Get notified at launch">
+  <div class="grab"></div>
+  <h3>Almost there 🐾</h3>
+  <p class="sub">Skippidy Skip launches soon on the App Store. Drop your email and we'll let you know the moment it's live.</p>
+  <form class="field" id="notifyForm">
+    <input type="email" id="email" placeholder="you@email.com" required autocomplete="email" inputmode="email" />
+    <button class="submit" type="submit">Notify me</button>
+  </form>
+  <div class="survey">
+    <p class="qq">What made you tap?</p>
+    <div class="chips" data-q="reason">
+      <button type="button" class="chip" data-v="skip">The skipping physics</button>
+      <button type="button" class="chip" data-v="race">Racing friends</button>
+      <button type="button" class="chip" data-v="paint">Painting my rock</button>
+      <button type="button" class="chip" data-v="curious">Just curious</button>
+    </div>
+    <p class="qq">Pay to remove ads?</p>
+    <div class="chips" data-q="pay">
+      <button type="button" class="chip" data-v="yes">Yes</button>
+      <button type="button" class="chip" data-v="maybe">Maybe</button>
+      <button type="button" class="chip" data-v="no">Nope</button>
+    </div>
+    <button type="button" class="surveyDone">Done</button>
+  </div>
+  <div class="done"><div class="ok">✅</div><p>You're on the list. Get ready to bounce. 🐾</p></div>
+</div>
+
+<script type="module" src="./ios.js"></script>
+</body>
+</html>
