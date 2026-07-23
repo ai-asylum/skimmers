@@ -112,6 +112,23 @@ const HOLES = [
   },
 ];
 const CAPTURE_R = 4.2;
+
+// PLAYABLE-AD slice (built with playable-kit, __PLAYABLE__ define). Trims the
+// game to its core skip-and-chain loop: skip title/find/shape/paint, drop
+// straight onto one short, obstacle-light hole with the flag within a throw or
+// two, one rival for life. Win => the ad's end-card CTA (wired in the playable
+// entry html). `typeof` guard keeps the token inert in normal web/Android builds.
+const IS_PLAYABLE = typeof __PLAYABLE__ !== "undefined" && !!__PLAYABLE__;
+if (IS_PLAYABLE) {
+  HOLES.length = 0;
+  HOLES.push({
+    time: 60,
+    path: [{ x: 0, z: 34 }, { x: 0, z: 4 }, { x: 0, z: -30 }],
+    islands: [],
+    rocks: [{ x: 12, z: 9, r: 3, h: 6 }, { x: -12, z: -11, r: 3, h: 6 }],
+  });
+}
+
 const holeTee = (idx = G.hole) => HOLES[idx].path[0];
 const holeFlag = (idx = G.hole) => HOLES[idx].path[HOLES[idx].path.length - 1];
 function holeLength(idx) {
@@ -1201,9 +1218,9 @@ function startRace() {
     addOutline(G.playerRock.mesh, 0x16324a, { thickness: 0.05 });
     G.playerRock.group.rotation.set(0, 0, 0);
 
-    // bots
+    // bots — a full fleet on web, just one rival for life in the playable slice
     G.racers = [G.player];
-    BOT_PERSONAS.forEach((persona, i) => {
+    (IS_PLAYABLE ? BOT_PERSONAS.slice(0, 1) : BOT_PERSONAS).forEach((persona, i) => {
       const rock = randomBotRock(1000 + i * 77);
       scene.add(rock.group);
       const s = new Skimmer(rock, persona.name, false, persona.color);
@@ -1700,6 +1717,13 @@ function endMatch(rowsIn = null) {
   }));
   const playerWon = rows[0]?.me;
   track("race_end", { mode: NET.mode, won: !!playerWon, place: rows.findIndex((r) => r.me) + 1 });
+  if (IS_PLAYABLE) {
+    // Hand off to the ad's end-card CTA (defined in the playable entry html).
+    if (playerWon) { audio.win(); } else { audio.lose(); }
+    cam.mode = "orbit";
+    try { window.__playableEnd__ && window.__playableEnd__(!!playerWon); } catch (e) { /* never break the ad */ }
+    return;
+  }
   ui.showResults(rows, playerWon);
   if (playerWon) {
     audio.win();
@@ -1922,14 +1946,31 @@ function frame(now) {
   renderer.render(scene, camera);
 }
 
-// analytics + attribution: safe no-ops without keys (see src/analytics.js).
-initAnalytics();
-track("session_start");
-// AppsFlyer is native-only; dynamic-import so the web bundle never pulls it in.
-void import("./appsflyer.js").then((m) => m.initAppsFlyer()).catch(() => {});
-
-enterTitle();
+if (IS_PLAYABLE) {
+  // Skip all the prep chrome — hand the player a ready flat stone and go.
+  startPlayable();
+} else {
+  // analytics + attribution: safe no-ops without keys (see src/analytics.js).
+  initAnalytics();
+  track("session_start");
+  // AppsFlyer is native-only; dynamic-import so the web bundle never pulls it in.
+  void import("./appsflyer.js").then((m) => m.initAppsFlyer()).catch(() => {});
+  enterTitle();
+}
 requestAnimationFrame(frame);
+
+// Playable slice bootstrap: a pre-shaped, flat, freshly-painted stone straight
+// into the race. No title, no find/shape/paint.
+function startPlayable() {
+  ui.els.title.classList.add("hidden");
+  const rock = new Rock({
+    seed: 7, lumpAmp: 0.09, thickness: 0.4, size: 0.6,
+    color: "#37c8e0", pattern: "flame",
+  });
+  scene.add(rock.group);
+  G.playerRock = rock;
+  startRace();
+}
 
 // tiny hook for automated smoke tests (harmless in normal play)
 window.__skimmers = { G, selectCandidate, worldToScreen, cam, camRig, camera, THREE, HOLES, boats, fishing };

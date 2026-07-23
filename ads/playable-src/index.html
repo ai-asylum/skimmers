@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Skippidy Skip — Playable</title>
+<!-- MRAID: injected by the ad container at runtime. Referenced (not bundled) so
+     networks that supply their own mraid.js are satisfied; a missing file in a
+     plain-browser preview is harmless (window.mraid just stays undefined). -->
+<script src="mraid.js"></script>
+<meta name="theme-color" content="#0a2a3d">
+<style>
+  :root {
+    --ink: #16324a;
+    --paper: #fdf6e3;
+    --accent: #ff8a3d;
+    --accent2: #37c8e0;
+    --gold: #ffd24a;
+    --danger: #ff5470;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a2a3d; }
+  body { font-family: "Trebuchet MS", "Comic Sans MS", cursive, sans-serif; color: var(--ink); }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+
+  /* ---------- generic layers ---------- */
+  .layer { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  .clickable { pointer-events: auto; }
+  .hidden { display: none !important; }
+
+  /* ---------- big cartoon text ---------- */
+  .bigtitle {
+    font-size: clamp(48px, 11vw, 130px);
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    color: var(--paper);
+    -webkit-text-stroke: 3px var(--ink);
+    text-shadow: 0 6px 0 var(--ink), 0 10px 24px rgba(0,0,0,0.4);
+    transform: rotate(-3deg);
+  }
+
+  /* ---------- title screen ---------- */
+  #title-screen {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; z-index: 40; pointer-events: auto;
+    background: radial-gradient(ellipse at 50% 120%, rgba(20,90,120,0.25), transparent 60%);
+  }
+  #game-logo {
+    width: clamp(300px, 72vw, 640px); height: auto;
+    filter: drop-shadow(0 12px 22px rgba(0,0,0,0.45));
+    transform: rotate(-3deg);
+    animation: logoBob 3.2s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes logoBob {
+    0%, 100% { transform: rotate(-3deg) translateY(0); }
+    50%      { transform: rotate(-3deg) translateY(-10px); }
+  }
+  #title-screen .sub {
+    font-size: clamp(14px, 2.4vw, 22px); color: var(--paper); font-weight: 700;
+    text-shadow: 0 2px 0 rgba(0,0,0,0.5); letter-spacing: 0.12em; text-transform: uppercase;
+  }
+  .btn {
+    pointer-events: auto; cursor: pointer; border: none;
+    font-family: inherit; font-weight: 900; letter-spacing: 0.06em;
+    font-size: clamp(18px, 3vw, 28px); color: var(--ink);
+    background: var(--gold);
+    padding: 16px 44px; border-radius: 60px;
+    box-shadow: 0 6px 0 #c99a1d, 0 12px 24px rgba(0,0,0,0.35);
+    transition: transform 0.08s ease, box-shadow 0.08s ease;
+    text-transform: uppercase;
+  }
+  .btn:hover { transform: translateY(-2px) scale(1.04) rotate(-1deg); }
+  .btn:active { transform: translateY(4px); box-shadow: 0 2px 0 #c99a1d, 0 4px 10px rgba(0,0,0,0.35); }
+  .btn.small { font-size: 16px; padding: 10px 24px; box-shadow: 0 4px 0 #c99a1d, 0 8px 14px rgba(0,0,0,0.3); }
+  .btn.blue { background: var(--accent2); box-shadow: 0 6px 0 #1d8fa3, 0 12px 24px rgba(0,0,0,0.35); }
+  .btn.blue:active { box-shadow: 0 2px 0 #1d8fa3, 0 4px 10px rgba(0,0,0,0.35); }
+
+  /* ---------- phase header (find/shape/paint) ---------- */
+  #phase-ui { z-index: 30; display: flex; flex-direction: column; align-items: center; }
+  #phase-title {
+    margin-top: 4vh;
+    font-size: clamp(28px, 6vw, 56px); font-weight: 900; color: var(--paper);
+    -webkit-text-stroke: 2px var(--ink);
+    text-shadow: 0 4px 0 var(--ink), 0 8px 18px rgba(0,0,0,0.35);
+    transform: rotate(-2deg);
+  }
+  #phase-hint {
+    margin-top: 6px; font-size: clamp(13px, 2vw, 18px); font-weight: 700; color: var(--paper);
+    text-shadow: 0 2px 4px rgba(0,0,0,0.6); background: rgba(10,42,61,0.55);
+    padding: 6px 18px; border-radius: 20px;
+  }
+  #phase-bottom {
+    position: absolute; bottom: 4vh; left: 0; right: 0;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+  }
+
+  /* stat bars for the rock */
+  #rock-stats { display: flex; gap: 18px; background: rgba(253,246,227,0.92); padding: 12px 20px; border-radius: 18px;
+    box-shadow: 0 4px 0 rgba(22,50,74,0.6), 0 10px 20px rgba(0,0,0,0.3); }
+  .stat { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 90px; }
+  .stat label { font-size: 12px; font-weight: 900; letter-spacing: 0.1em; }
+  .stat .bar { width: 100%; height: 12px; background: #d8ccb1; border-radius: 6px; overflow: hidden; border: 2px solid var(--ink); }
+  .stat .bar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.15s ease; }
+  .stat.flat .bar i { background: var(--accent2); }
+  .stat.grit .bar i { background: var(--gold); }
+
+  /* paint palette */
+  #paint-ui { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  .swatch-row { display: flex; gap: 10px; }
+  .swatch {
+    width: 44px; height: 44px; border-radius: 50%; border: 3px solid var(--ink); cursor: pointer;
+    box-shadow: 0 3px 0 rgba(0,0,0,0.4); transition: transform 0.1s ease; pointer-events: auto;
+  }
+  .swatch:hover { transform: scale(1.15) rotate(6deg); }
+  .swatch.sel { outline: 4px solid var(--paper); transform: scale(1.18); }
+  .pattern-chip {
+    padding: 8px 16px; border-radius: 14px; border: 3px solid var(--ink); background: var(--paper);
+    font-weight: 900; font-size: 14px; cursor: pointer; box-shadow: 0 3px 0 rgba(0,0,0,0.35);
+    pointer-events: auto; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .pattern-chip:hover { transform: translateY(-2px); }
+  .pattern-chip.sel { background: var(--gold); }
+
+  /* ---------- race HUD ---------- */
+  #race-hud { z-index: 20; }
+
+  /* minimap — lives top-right where the scoreboard used to be */
+  #minimap {
+    position: absolute; right: 14px; top: 64px;
+    width: 152px; height: 152px;
+    border-radius: 50%; border: 3px solid rgba(253,246,227,0.55);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+    background: rgba(10,42,61,0.5);
+  }
+
+  /* power + mode */
+  #throw-ui {
+    position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+  }
+  #throw-hint { font-size: 13px; font-weight: 700; color: var(--paper); text-shadow: 0 2px 4px rgba(0,0,0,0.7);
+    background: rgba(10,42,61,0.55); padding: 6px 16px; border-radius: 16px;
+    pointer-events: auto; cursor: pointer; transition: background 0.2s, transform 0.1s; }
+  #throw-hint:active { transform: scale(0.96); }
+  #throw-hint.splash { background: rgba(255,84,112,0.85); text-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+
+  /* combo popups + floating text */
+  #popups { z-index: 25; overflow: hidden; }
+  .popup {
+    position: absolute; font-weight: 900; white-space: nowrap;
+    -webkit-text-stroke: 1.5px var(--ink);
+    text-shadow: 0 3px 0 var(--ink), 0 6px 14px rgba(0,0,0,0.4);
+    transform: translate(-50%, -50%);
+    animation: popfloat 1.1s ease-out forwards;
+    will-change: transform, opacity;
+  }
+  @keyframes popfloat {
+    0%   { transform: translate(-50%,-50%) scale(0.2) rotate(var(--rot)); opacity: 0; }
+    12%  { transform: translate(-50%,-60%) scale(1.25) rotate(var(--rot)); opacity: 1; }
+    24%  { transform: translate(-50%,-64%) scale(1.0) rotate(var(--rot)); }
+    75%  { opacity: 1; }
+    100% { transform: translate(-50%,-160%) scale(1.02) rotate(var(--rot)); opacity: 0; }
+  }
+
+  /* center banners */
+  #banner {
+    position: absolute; top: 26%; left: 50%; transform: translateX(-50%);
+    text-align: center; z-index: 26; pointer-events: none;
+  }
+  .banner-text {
+    font-size: clamp(34px, 8vw, 84px); font-weight: 900; color: var(--gold);
+    -webkit-text-stroke: 2.5px var(--ink);
+    text-shadow: 0 5px 0 var(--ink), 0 10px 24px rgba(0,0,0,0.45);
+    animation: bannerIn 0.45s cubic-bezier(0.18, 1.6, 0.4, 1) both;
+    transform-origin: 50% 50%;
+  }
+  .banner-sub {
+    font-size: clamp(14px, 2.6vw, 24px); font-weight: 800; color: var(--paper);
+    text-shadow: 0 2px 6px rgba(0,0,0,0.7); margin-top: 4px;
+    animation: bannerIn 0.5s 0.08s cubic-bezier(0.18, 1.6, 0.4, 1) both;
+  }
+  @keyframes bannerIn {
+    0% { transform: scale(0) rotate(-10deg); opacity: 0; }
+    100% { transform: scale(1) rotate(-2deg); opacity: 1; }
+  }
+  .banner-out { animation: bannerOut 0.3s ease-in both !important; }
+  @keyframes bannerOut { to { transform: scale(0.6) rotate(4deg); opacity: 0; } }
+
+  /* ---------- fishing minigame ---------- */
+  #fishing-ui {
+    z-index: 32; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+    padding-top: 9vh;
+  }
+  #fishing-hint { margin-top: 4px; font-weight: 800; color: var(--paper); text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+    background: rgba(10,42,61,0.55); padding: 5px 16px; border-radius: 16px; }
+
+  /* ---------- results podium ---------- */
+  #results-ui {
+    z-index: 45; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+    background: rgba(6,26,40,0.55); backdrop-filter: blur(3px); pointer-events: auto;
+  }
+  #results-list { display: flex; flex-direction: column; gap: 8px; min-width: min(80vw, 420px); }
+  .result-row {
+    display: flex; align-items: center; gap: 14px; background: var(--paper);
+    padding: 10px 18px; border-radius: 16px; font-weight: 900;
+    box-shadow: 0 4px 0 rgba(0,0,0,0.35);
+    animation: rowIn 0.4s cubic-bezier(0.18, 1.4, 0.4, 1) both;
+  }
+  .result-row.first { background: var(--gold); transform: scale(1.06); font-size: 1.1em; }
+  .result-row .place { font-size: 22px; width: 40px; }
+  .result-row .dot { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid var(--ink); }
+  .result-row .rname { flex: 1; }
+  @keyframes rowIn { 0% { transform: translateX(-60px) scale(0.8); opacity: 0; } 100% { opacity: 1; } }
+
+  /* ---------- title menu (solo / multiplayer) ---------- */
+  .menu-view { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .menu-label {
+    font-size: clamp(13px, 2vw, 17px); font-weight: 900; letter-spacing: 0.14em;
+    color: var(--paper); text-shadow: 0 2px 4px rgba(0,0,0,0.6); text-transform: uppercase;
+  }
+  #room-sizes { display: flex; gap: 10px; }
+  .size-chip {
+    width: 58px; height: 58px; border-radius: 16px; border: 3px solid var(--ink);
+    background: var(--paper); color: var(--ink); font-family: inherit; font-weight: 900;
+    font-size: 26px; cursor: pointer; pointer-events: auto;
+    box-shadow: 0 4px 0 rgba(22,50,74,0.55); transition: transform 0.1s ease, background 0.1s ease;
+  }
+  .size-chip:hover { transform: translateY(-2px) scale(1.05); }
+  .size-chip.sel { background: var(--gold); transform: translateY(-2px) scale(1.08); }
+  #mp-actions { display: flex; gap: 12px; align-items: center; }
+
+  /* ---------- multiplayer lobby ---------- */
+  #net-status { min-height: 22px; font-weight: 800; color: var(--gold);
+    text-shadow: 0 2px 4px rgba(0,0,0,0.6); font-size: 15px; }
+  #lobby-panel {
+    position: fixed; top: 14px; left: 14px; z-index: 35;
+    background: rgba(10,42,61,0.8); border: 2px solid rgba(253,246,227,0.3);
+    border-radius: 16px; padding: 12px 16px; color: var(--paper);
+    display: flex; flex-direction: column; gap: 8px; min-width: 190px;
+    backdrop-filter: blur(4px); pointer-events: auto;
+  }
+  #lobby-code { font-weight: 900; font-size: 20px; letter-spacing: 0.18em; color: var(--gold); }
+  #lobby-list { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 700; }
+  #lobby-list .lp { display: flex; align-items: center; gap: 7px; }
+  #lobby-list .lp .dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.6); }
+  #lobby-hint { font-size: 11px; opacity: 0.75; max-width: 190px; }
+
+  /* ---------- killcam letterbox ---------- */
+  #letterbox { z-index: 27; }
+  #letterbox .bar { position: absolute; left: 0; right: 0; height: 0; background: #0a1622; transition: height 0.45s cubic-bezier(0.7,0,0.3,1); }
+  #letterbox .bar.top { top: 0; }
+  #letterbox .bar.bot { bottom: 0; }
+  #letterbox.on .bar { height: 11vh; }
+  #replay-tag {
+    position: absolute; top: calc(11vh + 14px); left: 22px;
+    font-weight: 900; font-size: 18px; letter-spacing: 0.12em; color: #ff5470;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.6); opacity: 0;
+  }
+  #letterbox.on #replay-tag { opacity: 1; animation: recblink 1s steps(2) infinite; }
+  @keyframes recblink { 50% { opacity: 0.25; } }
+
+  /* ---------- transition wipe ---------- */
+  #wipe { z-index: 60; background: var(--ink); transform: scaleY(0); transform-origin: 50% 0%; transition: transform 0.35s cubic-bezier(0.7,0,0.3,1); }
+  #wipe.on { transform: scaleY(1); }
+
+  /* vignette + subtle grade */
+  #vignette { z-index: 5; background: radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(6,22,36,0.42) 100%); }
+
+  /* underwater grade: deep blue tint + canvas wobble while the camera is submerged */
+  #underwater-tint {
+    z-index: 6; opacity: 0; transition: opacity 0.15s ease-out;
+    background: radial-gradient(ellipse at 50% 35%, rgba(10,60,110,0.28) 0%, rgba(4,24,52,0.6) 100%);
+  }
+  body.underwater #underwater-tint { opacity: 1; }
+  body.underwater #c { filter: url(#underwaterFilter) saturate(1.15) brightness(0.92); }
+
+  /* flash */
+  #flash { z-index: 28; opacity: 0; background: #fff; transition: opacity 0.25s ease-out; }
+
+  #muter { position: fixed; top: 12px; right: 12px; z-index: 50; background: rgba(10,42,61,0.6);
+    border: 2px solid rgba(253,246,227,0.3); color: var(--paper); width: 42px; height: 42px;
+    border-radius: 50%; cursor: pointer; pointer-events: auto;
+    display: flex; align-items: center; justify-content: center; }
+  #muter svg { width: 20px; height: 20px; }
+  #muter.muted { opacity: 0.6; }
+
+  /* ---------- playable end card + install CTA ---------- */
+  #pl-endcard {
+    position: fixed; inset: 0; z-index: 80; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 20px; text-align: center;
+    background: radial-gradient(ellipse at 50% 40%, rgba(10,60,90,0.55), rgba(6,22,36,0.82));
+    backdrop-filter: blur(3px); pointer-events: auto; padding: 24px;
+    animation: plFade 0.35s ease-out both;
+  }
+  #pl-endcard.hidden { display: none !important; }
+  @keyframes plFade { from { opacity: 0; } to { opacity: 1; } }
+  #pl-endcard img { width: clamp(220px, 62vw, 460px); height: auto; transform: rotate(-3deg);
+    filter: drop-shadow(0 10px 20px rgba(0,0,0,0.5)); animation: logoBob 3.2s ease-in-out infinite; }
+  #pl-endcard .pl-head {
+    font-size: clamp(30px, 8vw, 64px); font-weight: 900; color: var(--gold);
+    -webkit-text-stroke: 2.5px var(--ink);
+    text-shadow: 0 5px 0 var(--ink), 0 10px 24px rgba(0,0,0,0.45); transform: rotate(-2deg);
+  }
+  #pl-endcard .pl-sub { font-size: clamp(14px, 3vw, 22px); font-weight: 800; color: var(--paper);
+    text-shadow: 0 2px 6px rgba(0,0,0,0.7); }
+  .playable-cta {
+    display: inline-block; text-decoration: none; cursor: pointer;
+    font-family: inherit; font-weight: 900; letter-spacing: 0.06em; text-transform: uppercase;
+    font-size: clamp(20px, 4.4vw, 30px); color: var(--ink); background: var(--gold);
+    padding: 18px 52px; border-radius: 60px;
+    box-shadow: 0 7px 0 #c99a1d, 0 14px 28px rgba(0,0,0,0.4);
+    animation: ctaPulse 1.4s ease-in-out infinite; pointer-events: auto;
+  }
+  .playable-cta:active { transform: translateY(4px); box-shadow: 0 3px 0 #c99a1d, 0 6px 12px rgba(0,0,0,0.4); }
+  @keyframes ctaPulse { 0%,100% { transform: scale(1) rotate(-1deg); } 50% { transform: scale(1.06) rotate(1deg); } }
+  #pl-endcard .pl-retry { font-size: 15px; font-weight: 800; color: var(--paper); opacity: 0.85;
+    background: rgba(10,42,61,0.6); border: 2px solid rgba(253,246,227,0.35); border-radius: 40px;
+    padding: 9px 26px; cursor: pointer; pointer-events: auto; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="vignette" class="layer"></div>
+<div id="underwater-tint" class="layer"></div>
+
+<!-- wobbling displacement filter applied to the canvas while submerged -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="underwaterFilter" x="-5%" y="-5%" width="110%" height="110%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.008 0.018" numOctaves="2" seed="7" result="noise">
+      <animate attributeName="baseFrequency" dur="9s"
+        values="0.008 0.018;0.012 0.027;0.008 0.018" repeatCount="indefinite"/>
+    </feTurbulence>
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="16" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
+<div id="flash" class="layer"></div>
+<div id="popups" class="layer"></div>
+<div id="banner"></div>
+
+<!-- race HUD -->
+<div id="race-hud" class="layer hidden">
+  <canvas id="minimap" width="190" height="190"></canvas>
+  <div id="throw-ui">
+    <div id="throw-hint">drag back &amp; release to skip</div>
+  </div>
+</div>
+
+<!-- fishing -->
+<div id="fishing-ui" class="layer hidden"></div>
+
+<!-- find / shape / paint shared chrome -->
+<div id="phase-ui" class="layer hidden">
+  <div id="phase-title">FIND YOUR ROCK</div>
+  <div id="phase-hint">click a rock to size it up</div>
+  <div id="phase-bottom">
+    <div id="rock-stats" class="hidden">
+      <div class="stat flat"><label>FLAT</label><div class="bar"><i id="stat-flat"></i></div></div>
+      <div class="stat heft"><label>HEFT</label><div class="bar"><i id="stat-heft"></i></div></div>
+      <div class="stat grit"><label>GRIT</label><div class="bar"><i id="stat-grit"></i></div></div>
+    </div>
+    <div id="paint-ui" class="hidden">
+      <div class="swatch-row" id="swatches"></div>
+      <div class="swatch-row" id="patterns"></div>
+    </div>
+    <button id="phase-next" class="btn small hidden">Next →</button>
+  </div>
+</div>
+
+<!-- title (pre-hidden in the playable — we drop straight into the skip loop) -->
+<div id="title-screen" class="layer hidden">
+  <img id="game-logo" src="/media/logo.png" alt="Skippidy Skip" draggable="false">
+
+  <!-- main choice -->
+  <div id="menu-main" class="menu-view">
+    <button id="play-btn" class="btn">Solo</button>
+    <button id="mp-btn" class="btn blue">Multiplayer</button>
+  </div>
+
+  <!-- multiplayer: pick a room size, then matchmake with randoms -->
+  <div id="menu-mp" class="menu-view hidden">
+    <div class="menu-label">how many skippers?</div>
+    <div id="room-sizes">
+      <button class="size-chip" data-cap="1">1</button>
+      <button class="size-chip" data-cap="2">2</button>
+      <button class="size-chip" data-cap="3">3</button>
+      <button class="size-chip" data-cap="4">4</button>
+      <button class="size-chip" data-cap="0">∞</button>
+    </div>
+    <div id="mp-actions">
+      <button id="mp-back" class="btn small">← Back</button>
+      <button id="find-btn" class="btn blue">Find match</button>
+    </div>
+    <button id="mp-cancel" class="btn small hidden">Cancel search</button>
+  </div>
+
+  <div id="net-status"></div>
+</div>
+
+<!-- multiplayer lobby panel (persists through rock prep) -->
+<div id="lobby-panel" class="hidden">
+  <div id="lobby-code">ROOM ····</div>
+  <div id="lobby-list"></div>
+  <button id="start-btn" class="btn small hidden">Start race!</button>
+  <div id="lobby-hint">share the code — empty seats become bots</div>
+</div>
+
+<!-- results -->
+<div id="results-ui" class="layer hidden">
+  <div class="bigtitle" style="font-size: clamp(36px,7vw,80px);" id="results-title">RESULTS</div>
+  <div id="results-list"></div>
+  <button id="again-btn" class="btn blue">Play again</button>
+</div>
+
+<div id="letterbox" class="layer">
+  <div class="bar top"></div>
+  <div class="bar bot"></div>
+  <div id="replay-tag">REC · INSTANT REPLAY</div>
+</div>
+
+<button id="muter" title="sound">
+  <svg id="ic-sound" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/>
+    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+  </svg>
+  <svg id="ic-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="hidden">
+    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/>
+    <line x1="23" y1="9" x2="17" y2="15"/>
+    <line x1="17" y1="9" x2="23" y2="15"/>
+  </svg>
+</button>
+<div id="wipe" class="layer"></div>
+
+<!-- playable install end card (win-only demo; shown by main.js via __playableEnd__) -->
+<div id="pl-endcard" class="hidden">
+  <img src="/media/logo.png" alt="Skippidy Skip" draggable="false">
+  <div class="pl-head" id="pl-headline">NICE SKIP!</div>
+  <div class="pl-sub">Race friends across a lake full of rivals, boats & ducks.</div>
+  <a id="pl-cta" class="playable-cta"
+     href="https://play.google.com/store/apps/details?id=games.misaligned.skippidyskip"
+     data-store-url="https://play.google.com/store/apps/details?id=games.misaligned.skippidyskip">Get the full game</a>
+  <div class="pl-retry" id="pl-retry">Skip again</div>
+</div>
+
+<script>
+  // Playable ad glue — CTA routing + AppLovin analytics. Kept vanilla and
+  // outside the game module so it works even if the bundle errors.
+  (function () {
+    var STORE_URL = 'https://play.google.com/store/apps/details?id=games.misaligned.skippidyskip';
+
+    // AppLovin playable analytics: the only tracking allowed inside ad
+    // containers (external beacons are forbidden). Predefined events only.
+    function track(event) {
+      try {
+        var al = window.ALPlayableAnalytics;
+        if (al && typeof al.trackEvent === 'function') al.trackEvent(event);
+      } catch (_) { /* analytics must never break the ad */ }
+    }
+    window.__track = track;
+    track('LOADED');
+
+    // First user input arms CHALLENGE_STARTED + the ORG-WIDE time grid
+    // (30s / 90s / 300s after first input). Identical across every ai-asylum
+    // playable so campaigns stay comparable — never tune these per creative.
+    document.addEventListener('pointerdown', function arm() {
+      document.removeEventListener('pointerdown', arm);
+      track('CHALLENGE_STARTED');
+      setTimeout(function () { track('CHALLENGE_PASS_25'); }, 30000);
+      setTimeout(function () { track('CHALLENGE_PASS_50'); }, 90000);
+      setTimeout(function () { track('CHALLENGE_PASS_75'); }, 300000);
+    });
+
+    // CTA -> store through whichever hook the host container provides:
+    // MRAID (AppLovin/ironSource/Unity) -> Facebook -> generic -> plain link.
+    function openStore(url) {
+      var target = url || STORE_URL;
+      track('CTA_CLICKED');
+      try {
+        var m = window.mraid;
+        if (m && typeof m.open === 'function') { m.open(target); return; }
+        var fb = window.FbPlayableAd;
+        if (fb && typeof fb.onCTAClick === 'function') { fb.onCTAClick(); return; }
+        if (typeof window.onCTAClick === 'function') { window.onCTAClick(); return; }
+        if (typeof window.install === 'function') { window.install(); return; }
+      } catch (_) { /* fall through to the plain link */ }
+      window.open(target, '_blank', 'noopener');
+    }
+    window.__openStore = openStore;
+    document.addEventListener('click', function (e) {
+      var a = e.target.closest && e.target.closest('[data-store-url]');
+      if (!a) return;
+      e.preventDefault();
+      openStore(a.getAttribute('data-store-url'));
+    });
+
+    // The game (main.js, __PLAYABLE__ build) calls this when the race ends.
+    window.__playableEnd__ = function (won) {
+      var card = document.getElementById('pl-endcard');
+      var head = document.getElementById('pl-headline');
+      if (head) head.textContent = won ? 'YOU WON THE HOLE!' : 'SO CLOSE!';
+      if (card) card.classList.remove('hidden');
+      track(won ? 'CHALLENGE_SOLVED' : 'CHALLENGE_FAILED');
+      track('ENDCARD_SHOWN');
+    };
+
+    // "Skip again" replays the trimmed slice (win-only demo => retry available).
+    document.getElementById('pl-retry').addEventListener('click', function () {
+      track('CHALLENGE_RETRY');
+      location.reload();
+    });
+  })();
+</script>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

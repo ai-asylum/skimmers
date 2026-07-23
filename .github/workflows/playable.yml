@@ -1,0 +1,31 @@
+name: Playable
+
+# Rebuilds ads/playable/index.html from source and behaviorally smoke-tests it
+# (headless Chromium over file://: canvas renders, no page errors, no
+# disallowed external requests). On main pushes a stale committed artifact is
+# replaced with a fresh rebuild commit; on PRs staleness fails the check.
+# All logic lives in ai-asylum/playable-kit (shared across the game repos).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "media/**"
+      - "ads/playable-src/**"
+      - "scripts/build-playable.mjs"
+      - "vite.playable.config.js"
+      - "vendor/**"
+      - "package*.json"
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: playable-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playable:
+    uses: ai-asylum/playable-kit/.github/workflows/playable-check.yml@v1
+    permissions:
+      contents: write

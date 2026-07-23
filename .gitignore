@@ -4,6 +4,7 @@ node_modules/
 
 # Vite build output
 dist/
+dist-playable/
 
 # Capacitor / Android build artifacts (android/ itself is checked in)
 android/app/build/
