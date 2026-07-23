@@ -1,9 +1,75 @@
 name: Playable
+
+# Rebuilds ads/playable/index.html from source and behaviorally smoke-tests it
+# (headless Chromium over file://: canvas renders, no page errors, no disallowed
+# external requests). Mirrors ai-asylum/playable-kit's reusable playable-check
+# workflow, inlined here because that workflow lives in a PRIVATE repo this repo
+# can't resolve via `uses:`. On main pushes a stale committed artifact is
+# rebuilt-and-committed back; the smoke test is the gate on every event.
+
 on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "media/**"
+      - "ads/playable-src/**"
+      - "scripts/build-playable.mjs"
+      - "vite.playable.config.js"
+      - "vendor/**"
+      - "package*.json"
   pull_request:
     branches: [main]
+
+concurrency:
+  group: playable-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  diag:
+  playable:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # for the rebuild commit on push
+    env:
+      PLAYABLE_GLOB: ads/playable/*.html
     steps:
-      - run: echo "workflow started OK"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild the playable from source
+        run: npm run build:playable
+
+      - name: Check the committed artifact is fresh
+        id: diff
+        run: |
+          if git diff --quiet -- $PLAYABLE_GLOB; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            echo "committed playable matches a fresh build"
+          else
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            git diff --stat -- $PLAYABLE_GLOB
+          fi
+
+      - name: Commit the fresh build back (main pushes only)
+        if: steps.diff.outputs.stale == 'true' && github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add $PLAYABLE_GLOB
+          git commit -m "chore: rebuild playable from source [skip ci]"
+          git push
+
+      - name: Install Chromium for the smoke test
+        run: npx playwright install --with-deps chromium
+
+      - name: Behavioral smoke test (boots, renders, no disallowed requests)
+        run: npx playable-smoke $PLAYABLE_GLOB
