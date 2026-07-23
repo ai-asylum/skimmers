@@ -1,0 +1,87 @@
+# Builds the Capacitor Android APK/AAB from the web bundle. Secrets degrade
+# gracefully: no keystore => debug-signed (testable, not uploadable); no Play
+# service account => artifact only. Google requires the FIRST upload of a new
+# app to be manual in the Console; the Play step takes over from build 2.
+name: Android Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "vercel.json"
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Secrets can't be referenced in step `if:` directly; presence flags here.
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      HAS_PLAY_SA: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # Capacitor CLI 8 requires Node >= 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21" # Capacitor 8 / AGP 8.x need JDK 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web bundle
+        env:
+          # Absent secrets => the APK ships analytics/attribution OFF (no-op).
+          VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
+          VITE_POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST }}
+          VITE_APPSFLYER_DEV_KEY: ${{ secrets.VITE_APPSFLYER_DEV_KEY }}
+        run: npm run build
+
+      - name: Sync web bundle into the Android project
+        run: npx cap sync android
+
+      - name: Decode Play upload keystore
+        if: env.HAS_KEYSTORE == 'true'
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > /tmp/upload-keystore.jks
+
+      - name: Build release APK + AAB
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ env.HAS_KEYSTORE == 'true' && '/tmp/upload-keystore.jks' || '' }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          VERSION_CODE: ${{ github.run_number }} # Play needs strictly increasing
+        run: ./gradlew assembleRelease bundleRelease --no-daemon --stacktrace
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: skippidyskip-android-release
+          path: |
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+
+      - name: Upload AAB to Play (internal track)
+        if: github.event_name == 'push' && env.HAS_PLAY_SA == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: games.misaligned.skippidyskip
+          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          # completed = live to internal testers on merge (internal track has no
+          # Google review and no public exposure). The HUMAN gate is promoting
+          # to closed/production in the Play Console — that's the submission.
+          status: completed

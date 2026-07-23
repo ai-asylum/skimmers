@@ -26,6 +26,7 @@ import { Fishing, BUOY_REST } from "./fishing.js";
 import { Minimap } from "./minimap.js";
 import { Net, matchCode } from "./net.js";
 import * as ui from "./ui.js";
+import { initAnalytics, track } from "./analytics.js";
 
 // ------------------------------------------------------------------ renderer
 const canvas = document.getElementById("c");
@@ -1188,6 +1189,7 @@ function updatePaint(dt) {
 
 // ------------------------------------------------------------------ phase: RACE
 function startRace() {
+  track("race_start", { mode: NET.mode, racers: NET.mode === "solo" ? 8 : NET.players.size });
   ui.hidePhase();
   ui.wipe(() => {
     G.state = "race";
@@ -1697,6 +1699,7 @@ function endMatch(rowsIn = null) {
     me: NET.mode === "solo" ? r.me : r.id === NET.myId,
   }));
   const playerWon = rows[0]?.me;
+  track("race_end", { mode: NET.mode, won: !!playerWon, place: rows.findIndex((r) => r.me) + 1 });
   ui.showResults(rows, playerWon);
   if (playerWon) {
     audio.win();
@@ -1918,6 +1921,12 @@ function frame(now) {
 
   renderer.render(scene, camera);
 }
+
+// analytics + attribution: safe no-ops without keys (see src/analytics.js).
+initAnalytics();
+track("session_start");
+// AppsFlyer is native-only; dynamic-import so the web bundle never pulls it in.
+void import("./appsflyer.js").then((m) => m.initAppsFlyer()).catch(() => {});
 
 enterTitle();
 requestAnimationFrame(frame);

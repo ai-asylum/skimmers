@@ -3,7 +3,22 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "npx --yes serve --no-clipboard -l 8741 .",
-    "start": "npx --yes serve --no-clipboard -l 8741 ."
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 8741",
+    "start": "vite"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/core": "^8.4.2",
+    "appsflyer-capacitor-plugin": "^6.18.0",
+    "peerjs": "1.5.4",
+    "posthog-js": "^1.407.1",
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.4.2",
+    "vite": "^8.1.5"
   }
 }

@@ -1,0 +1,8 @@
+{
+  "appId": "games.misaligned.skippidyskip",
+  "appName": "Skippidy Skip",
+  "webDir": "dist",
+  "android": {
+    "webContentsDebuggingEnabled": true
+  }
+}

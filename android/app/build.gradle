@@ -1,0 +1,90 @@
+apply plugin: 'com.android.application'
+
+// --- Play upload signing (spliced from mobile-launch skill) ----------------
+// CI decodes the keystore from a secret and points ANDROID_KEYSTORE_PATH at it;
+// local release builds read the gitignored android/keystore.properties. Neither
+// present => release signs with the debug key, so test builds keep working.
+def uploadStoreFile = null
+def uploadStorePassword = null
+def uploadKeyAlias = "upload"
+def uploadKeyPassword = null
+def envKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+if (envKeystorePath) {
+    uploadStoreFile = file(envKeystorePath)
+    uploadStorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+    uploadKeyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "upload"
+    uploadKeyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: uploadStorePassword
+} else if (rootProject.file("keystore.properties").exists()) {
+    def props = new Properties()
+    rootProject.file("keystore.properties").withInputStream { props.load(it) }
+    uploadStoreFile = rootProject.file(props.getProperty("storeFile"))
+    uploadStorePassword = props.getProperty("storePassword")
+    uploadKeyAlias = props.getProperty("keyAlias") ?: "upload"
+    uploadKeyPassword = props.getProperty("keyPassword") ?: uploadStorePassword
+}
+
+android {
+    namespace = "games.misaligned.skippidyskip"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "games.misaligned.skippidyskip"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        // Play requires a strictly increasing versionCode; CI passes the run number.
+        versionCode Integer.parseInt(System.getenv("VERSION_CODE") ?: "1")
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        upload {
+            if (uploadStoreFile != null) {
+                storeFile uploadStoreFile
+                storePassword uploadStorePassword
+                keyAlias uploadKeyAlias
+                keyPassword uploadKeyPassword
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig uploadStoreFile != null ? signingConfigs.upload : signingConfigs.debug
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Skippidy Skip</string>
+    <string name="title_activity_main">Skippidy Skip</string>
+    <string name="package_name">games.misaligned.skippidyskip</string>
+    <string name="custom_url_scheme">games.misaligned.skippidyskip</string>
+</resources>

@@ -1,3 +1,16 @@
 .DS_Store
 node_modules/
 .vercel
+
+# Vite build output
+dist/
+
+# Capacitor / Android build artifacts (android/ itself is checked in)
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/app/release/
+android/keystore.properties
+*.jks
+*.keystore
