@@ -95,6 +95,21 @@ let _path = null; // Array<{x,z}> | null (null => full radial disc, e.g. title)
 let _halfW = CHANNEL_W;
 let _nfreq = DEFAULT_NOISE.freq, _namp = DEFAULT_NOISE.amp; // cached per hole
 
+/**
+ * Point the JS-side helpers (distToPath, isWaterAt, the bed) at a hole's
+ * channel. Water.setPath calls this as it uploads the same polyline to the
+ * shader; it is separate so headless callers can shape the lake without a
+ * renderer. Null/short path => the full radial disc (title screen).
+ */
+export function setWaterPath(path, halfWidth = CHANNEL_W) {
+  _halfW = halfWidth;
+  const noise = getNoise();
+  _nfreq = noise.freq;
+  _namp = noise.amp;
+  _path = path && path.length >= 2 ? path.map((p) => ({ x: p.x, z: p.z })) : null;
+  return _path;
+}
+
 /** shortest distance from (x,z) to the current fairway centreline polyline */
 export function distToPath(x, z) {
   if (!_path || _path.length < 2) return Math.hypot(x, z); // radial fallback
@@ -142,7 +157,9 @@ export function sunkRestY(x, z) { return Math.min(-0.45, bedHeightAt(x, z) + 0.4
 
 export class Water {
   constructor(scene) {
-    const geo = new THREE.PlaneGeometry(LAKE_R * 2.6, LAKE_R * 2.6, 96, 96);
+    // wide enough to carry a fairway that runs corner to corner past LAKE_R,
+    // not just a lake-sized disc (see terrain.js MOUNT_INSET)
+    const geo = new THREE.PlaneGeometry(LAKE_R * 3.4, LAKE_R * 3.4, 120, 120);
     geo.rotateX(-Math.PI / 2);
 
     const pathArr = [];
@@ -414,19 +431,15 @@ export class Water {
    * short path to fall back to the full radial disc (used on the title screen).
    */
   setPath(path, halfWidth = CHANNEL_W) {
-    _halfW = halfWidth;
+    const shaped = setWaterPath(path, halfWidth);
     this.uniforms.uChannelW.value = halfWidth;
-    const noise = getNoise();
-    _nfreq = noise.freq; _namp = noise.amp;
-    this.uniforms.uNoiseFreq.value = noise.freq;
-    this.uniforms.uNoiseAmp.value = noise.amp;
+    this.uniforms.uNoiseFreq.value = _nfreq;
+    this.uniforms.uNoiseAmp.value = _namp;
     const arr = this.uniforms.uPath.value;
-    if (!path || path.length < 2) {
-      _path = null;
+    if (!shaped) {
       this.uniforms.uPathCount.value = 0;
       return;
     }
-    _path = path.map((p) => ({ x: p.x, z: p.z }));
     const n = Math.min(path.length, CHANNEL_MAX_PTS);
     for (let i = 0; i < n; i++) arr[i].set(path[i].x, path[i].z);
     this.uniforms.uPathCount.value = n;

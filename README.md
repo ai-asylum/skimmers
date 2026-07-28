@@ -25,15 +25,18 @@ find a rock → shape it → paint it → skip battle
 
 | Verb | How |
 |---|---|
-| **Skip** | drag back & release — drag length is power, sideways drag steers. Flat + fast throws chain hops. |
+| **Look** | drag sideways — a swipe across the screen spins you the whole way round the stone, and it costs no power, so you can read the hole before committing |
+| **Skip** | drag *back* & release — how far back is the power, and it comes out flat and fast to chain hops |
+| **Lob** | drag *forward* instead and the stone goes up rather than out, as steep as a mortar. It lands flat with zero skips, which is how you drop one into a pocket a skipper could never reach |
 | **Splash** | tap the SKIP/SPLASH pill (or press `X`) and lob your stone at a rival — knock theirs under and they have to fish it back |
 | **Fish** | sank it? the camera dives underwater — steer the descending hook past the fish to your rock. Every fish you bump shoves the hook back up and costs you distance |
 | **Island stop** | land on an island and you throw from dry sand — no drowning, no fishing |
 | **Ferry** | land *in* a boat and it carries your stone across the lake |
 | **Rebound** | hit a hull side and the stone BOINGs off elastically — bank shots count toward your chain |
 
-Each hole is a fairway of buoys with doglegs and island rest stops — follow
-the minimap. Giant rock spires wall off the straight line to the flag:
+Each hole is a long river of buoys that runs the full width of the map, tee to
+flag in one direction, with hard elbows and island rest stops along the way —
+follow the minimap (tap it to blow it up). Giant rock spires wall off the straight line to the flag:
 **CLONK** into one and your chain is dead (a high splash-lob can just clear
 the shorter ones). The hole itself is a whirlpool with the flagpole planted
 bare in the middle of it, and the swirl you can see is exactly the zone that
@@ -77,9 +80,11 @@ No build step. Plain ES modules; three.js comes from a CDN importmap.
 - [`src/bots.js`](src/bots.js) — 7 CPU personas play through the *same*
   `Skimmer` physics as you, navigating the fairway waypoint by waypoint with
   skill-scaled wobble.
-- [`src/rock.js`](src/rock.js) — procedural stones: grindable lump field,
-  layered canvas skin (base coat + brush strokes), spring-loaded googly eyes
-  that glance at whichever rival stone is nearest.
+- [`src/rock.js`](src/rock.js) — procedural stones: a drillable voxel field
+  meshed by marching cubes, layered canvas skin (base coat + brush strokes),
+  spring-loaded googly eyes that glance at whichever rival stone is nearest.
+- [`src/marchingcubes.js`](src/marchingcubes.js) — the isosurface mesher, with
+  its triangle table derived at load time rather than typed in by hand.
 - [`src/eyeconfig.js`](src/eyeconfig.js) — where the pupils sit in each face of
   the eye sheet. Re-measure the whole sheet with
   `node scripts/measure-eyes.mjs`, drag the sockets by hand in the Eyes Lab at

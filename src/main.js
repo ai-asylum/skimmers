@@ -19,9 +19,12 @@ import { Particles } from "./particles.js";
 import { Water, WATER_Y, LAKE_R, VORTEX_R } from "./water.js";
 import { World, shoreHeight, RivalLines, PONTOON_DECK } from "./world.js";
 import { Boats } from "./boats.js";
-import { Rock, ROCK_COLORS, ROCK_PATTERNS, rockName, randomBotRock, setEyeTarget } from "./rock.js";
+import {
+  Rock, ROCK_PATTERNS, PAINT_COLORS, BRUSH_MIN, BRUSH_MAX, BRUSH_DEF,
+  rockName, randomBotRock, setEyeTarget,
+} from "./rock.js";
 import { EYE_EXPRESSIONS, EYE_INDEX } from "./flateyes.js";
-import { Skimmer, simulateThrow, BLAST_R } from "./physics.js";
+import { Skimmer, simulateThrow, BLAST_R, SKIP_ELEV, MAX_ELEV } from "./physics.js";
 import { BotBrain, BOT_PERSONAS } from "./bots.js";
 import { Fishing, BUOY_REST } from "./fishing.js";
 import { Minimap } from "./minimap.js";
@@ -124,6 +127,8 @@ const G = {
   slowmoUsed: false,
   aimDir: new THREE.Vector3(0, 0, -1), // camera-following aim direction
   paintDrag: { mode: null, lastX: 0, lastY: 0, spinVel: 0 }, // paint-phase grab & spin
+  brushColor: PAINT_COLORS[1], // paint loaded on the brush
+  brushSize: BRUSH_DEF, // dab radius in skin texels
   idleSpinAt: 0, // game-time after which the rock's lazy turntable spin may resume (5s after last touch)
   raceTape: [], // rolling frames of EVERY racer's transform, for the killcam
   raceTapeEvents: [], // { frame, type, x, y, z, who } splashes etc, re-fired in replay
@@ -202,9 +207,15 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-function raycastFrom(e, objects) {
-  ndc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+/** point `raycaster` through a screen position without hitting anything with it */
+function aimAt(clientX, clientY) {
+  ndc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
+  return raycaster.ray;
+}
+
+function raycastFrom(e, objects) {
+  aimAt(e.clientX, e.clientY);
   return raycaster.intersectObjects(objects, true);
 }
 
@@ -342,29 +353,50 @@ function currentFlagV3() {
 }
 
 // ------------------------------------------------------------------ drag / throw
-const drag = { active: false, power: 0, dir: new THREE.Vector3(0, 0, -1) };
+// The drag is two independent axes rather than one slingshot pull.
+//
+//   sideways -> look. A full swipe across the short edge of the screen carries
+//     you further than all the way round the stone, and it costs no power at
+//     all, so you can spin the camera to read the hole and still throw the shot
+//     you meant to throw. This is the whole reason power is not |drag|.
+//   up/down  -> how the stone leaves your hand, and how hard. Pull back (down)
+//     for the flat hard skipper; push forward (up) to loft it, all the way to
+//     MAX_ELEV where it goes up like a mortar and plops with no skips at all.
+//     Distance travelled on this axis is the power either way.
+const AIM_TURNS = 0.9; // screen-widths of sideways drag per full 360° of look
+const PULL_SPAN = 0.30; // fraction of the short screen edge for a full-power pull
+const LOFT_SPAN = 0.7; // of an upward pull, the part that steepens the throw
+const FLAT_ELEV = SKIP_ELEV + 0.10; // the flattest end of the lofted range
+
+const drag = { active: false, power: 0, elev: FLAT_ELEV, dir: new THREE.Vector3(0, 0, -1) };
 
 function updateDragAim() {
   const p = G.player;
   if (!p) return;
+  const shortEdge = Math.min(window.innerWidth, window.innerHeight);
   const dx = pointer.x - pointer.startX;
   const dy = pointer.y - pointer.startY;
-  const len = Math.hypot(dx, dy);
-  drag.power = clamp01(len / (Math.min(window.innerWidth, window.innerHeight) * 0.38));
 
-  // base direction: rock -> next fairway target, rotated by horizontal drag
+  const pull = clamp(dy / (shortEdge * PULL_SPAN), -1, 1); // +1 back, -1 forward
+  drag.power = Math.abs(pull);
+  const loft = clamp01(-pull / LOFT_SPAN); // tops out before the power does
+  drag.elev = pull >= 0
+    ? SKIP_ELEV + 0.10 * (1 - drag.power) // the old skipper curve, unchanged
+    : FLAT_ELEV + (MAX_ELEV - FLAT_ELEV) * loft;
+
+  // base direction: rock -> next fairway target, rotated by sideways drag
   const target = aimTarget();
   const base = new THREE.Vector3(target.x - p.pos.x, 0, target.z - p.pos.z);
   if (base.lengthSq() < 0.01) base.set(0, 0, -1);
   base.normalize();
-  const ang = -dx * 0.005;
+  const ang = -dx * ((Math.PI * 2) / (shortEdge * AIM_TURNS));
   const cos = Math.cos(ang), sin = Math.sin(ang);
   drag.dir.set(base.x * cos - base.z * sin, 0, base.x * sin + base.z * cos);
   G.aimDir.copy(drag.dir); // camera orbits to keep the previz centered
 
   // preview via the real sim
   previewMat.color.setHex(G.throwMode === "splash" ? 0xff9aac : 0xffffff);
-  const sim = simulateThrow(p.pos, drag.dir, drag.power, G.throwMode, p.rock, water, G.elapsed, 6, HOLES[G.hole].islands, HOLES[G.hole].rocks);
+  const sim = simulateThrow(p.pos, drag.dir, drag.power, G.throwMode, p.rock, water, G.elapsed, 6, HOLES[G.hole].islands, HOLES[G.hole].rocks, drag.elev);
   const step = Math.max(1, Math.floor(sim.points.length / previewDots.length));
   let di = 0;
   for (let i = 0; i < sim.points.length && di < previewDots.length; i += step) {
@@ -394,7 +426,7 @@ function tryPlayerThrow() {
   // invisible aim assist (team scrap: invisible-driving-assist-layer):
   // if the throw would land near the flag line, nudge it a touch truer
   if (G.throwMode === "skip") {
-    const sim = simulateThrow(p.pos, drag.dir, power, "skip", p.rock, water, G.elapsed, 6, HOLES[G.hole].islands, HOLES[G.hole].rocks);
+    const sim = simulateThrow(p.pos, drag.dir, power, "skip", p.rock, water, G.elapsed, 6, HOLES[G.hole].islands, HOLES[G.hole].rocks, drag.elev);
     const end = sim.points[sim.points.length - 1];
     if (end) {
       const flag = currentFlagV3();
@@ -405,7 +437,7 @@ function tryPlayerThrow() {
       }
     }
   }
-  if (p.throwRock(drag.dir, power, G.throwMode)) {
+  if (p.throwRock(drag.dir, power, G.throwMode, drag.elev)) {
     fishing.hideBuoy(); // leaving the buoy lie (no-op otherwise)
     cam.mode = "flight";
     G.slowmoUsed = false;
@@ -466,6 +498,7 @@ function onPointerUp() {
     tryPlayerThrow();
     drag.active = false;
     drag.power = 0;
+    drag.elev = FLAT_ELEV;
     hidePreview();
   }
   drag.active = false;
@@ -547,12 +580,13 @@ function netStatus(text) {
   lobbyEls.status.textContent = text;
 }
 
-// The sculpt is free-form now, so the wire carries the facet field itself
-// (one byte each, holes included) rather than a lump-amplitude approximation.
+// The stone is a voxel field now, so the wire carries the seed that grows the
+// pristine block plus the log of bites drilled out of it — a few hundred bytes
+// either way, and the peer's copy comes out identical rather than approximate.
 function rockCfg(rock) {
   return {
     seed: rock.seed, size: rock.size, thickness: rock.baseThickness,
-    grindFrac: rock.grindFrac, lumpAmp: rock.lumpAmp,
+    lumpAmp: rock.lumpAmp,
     color: rock.color, pattern: rock.pattern, sculpt: rock.sculptData(),
     strokes: rock.strokesDataURL(), name: rockName(rock.seed),
   };
@@ -563,7 +597,6 @@ function rockFromCfg(c) {
     seed: c.seed, lumpAmp: c.lumpAmp, thickness: c.thickness,
     size: c.size, color: c.color, pattern: c.pattern,
   });
-  r.grindFrac = c.grindFrac ?? 0; // sets thickness, which the sculpt sits on
   r.applySculptData(c.sculpt);
   r.applyStrokesDataURL(c.strokes);
   return r;
@@ -1098,25 +1131,14 @@ function beginNetRace(playersArr, botsArr) {
 }
 
 // ------------------------------------------------------------------ phase: SHAPE
-// Dragging on the stone digs, full stop — no tools to pick between. The dig
-// shaves any bump it meets before biting into the body, so smoothing the stone
-// flat and hollowing it out are the same gesture. It moves slowly enough that
-// going clean through stays a decision.
-const CARVE_RATE = 0.3;
-const CARVE_R = 0.55; // brush width, as a chord distance on the unit sphere
+// Dragging on the stone drills, full stop — no tools to pick between. The bit
+// eats whatever it meets, so shaving a bump flat and boring a tunnel are the
+// same gesture, and it moves slowly enough that going clean through stays a
+// decision. The stone itself does the aiming: the drill sits on the floor of
+// the pit, and the floor keeps sinking.
+const CARVE_RATE = 1.0;
+const CARVE_R = 0.36; // bore radius, in body radii
 const SHAPE_HINT = "dig in — stay on one spot and you'll go clean through";
-
-// Once a hole is open the pointer ray falls clean through the stone and finds no
-// surface at all — so aim at where it enters the shell instead, and the drill
-// keeps biting the rim rather than stalling on the very thing you're widening.
-const _shell = new THREE.Sphere();
-const _shellHit = new THREE.Vector3();
-function shellEntry(rock) {
-  if (!rock.geo.boundingSphere) return null;
-  rock.mesh.updateMatrixWorld();
-  _shell.copy(rock.geo.boundingSphere).applyMatrix4(rock.mesh.matrixWorld);
-  return raycaster.ray.intersectSphere(_shell, _shellHit) ? _shellHit : null;
-}
 
 function enterShape() {
   G.state = "shape";
@@ -1170,12 +1192,10 @@ function updateShape(dt) {
     pd.spinVel = 0; // touching (sculpting/rotating) or inside the 5s hold: dead still
   }
   if (G.sculpting) {
-    const hits = raycastFrom({ clientX: pointer.x, clientY: pointer.y }, [rock.mesh]);
-    const at = hits.length ? hits[0].point : shellEntry(rock);
-    if (at) {
-      const wasSolid = rock.cutCount === 0;
-      const { moved, punched } = rock.sculptAt(at, "carve", CARVE_R, dt * CARVE_RATE);
-      if (moved > 0.0004) {
+    aimAt(pointer.x, pointer.y);
+    const { hit, at, moved, punched } = rock.carve(raycaster.ray, CARVE_R, dt * CARVE_RATE);
+    if (hit) {
+      if (moved > 0.0002) {
         particles.grindChips(at);
         if (Math.random() < 0.35) audio.grind();
         ui.showStats(rock.flat, rock.heft, rock.grit);
@@ -1186,13 +1206,9 @@ function updateShape(dt) {
         rock.react(Math.random() < 0.5 ? "dizzy" : "surprised", 0.35);
         rock.kickEyes(0.6);
       }
-      // breakthrough: the dig met the far side and daylight came through
+      // breakthrough: the bore met the far side and daylight came through
       if (punched) {
         G.shapeEyeHold = G.elapsed + 1.6; // linger so the hole gets its moment
-        if (wasSolid) {
-          const s = worldToScreen(at);
-          ui.popup(s.x, s.y - 24, "right through!", { size: 24, color: "#ffd24a" });
-        }
         particles.grindChips(at);
         audio.thunk();
         shake(0.16);
@@ -1207,29 +1223,37 @@ function updateShape(dt) {
 // ------------------------------------------------------------------ phase: PAINT
 function enterPaint() {
   G.state = "paint";
-  G.brushColor = ROCK_COLORS[1];
+  G.brushColor = PAINT_COLORS[1];
+  G.brushSize = BRUSH_DEF;
   G.paintDrag.spinVel = 0.5;
   G.idleSpinAt = G.elapsed; // idle turntable spins from entry until first touch
   ui.showPhase("PAINT IT", "make it yours — the lake will judge you");
   ui.els.phaseNext.textContent = "To the lake! →";
   ui.els.rockStats.classList.add("hidden");
   G.playerRock.fadeEyes(1); // face back on for the paint booth
-  ui.buildPaintUI(
-    ROCK_COLORS,
-    ["dunk", ...ROCK_PATTERNS, "wash"],
-    (c) => {
+  ui.buildPaintUI({
+    colors: PAINT_COLORS,
+    patterns: ["dunk", ...ROCK_PATTERNS, "wash"],
+    brush: { min: BRUSH_MIN, max: BRUSH_MAX, value: G.brushSize },
+    selected: G.brushColor,
+    onColor: (c) => {
       G.brushColor = c;
+      ui.setBrushColor(c);
       audio.pip(true);
     },
-    (p) => {
+    onPattern: (p) => {
       if (p === "dunk") G.playerRock.repaint(G.brushColor, null);
       else if (p === "wash") G.playerRock.clearStrokes();
       else G.playerRock.repaint(null, p);
       audio.paintDab();
       particles.paintPuff(G.playerRock.group.position, p === "wash" ? "#bfe8ff" : G.brushColor);
       G.playerRock.kickEyes(1);
-    }
-  );
+    },
+    onSize: (r) => {
+      G.brushSize = r;
+    },
+  });
+  ui.setBrushColor(G.brushColor);
 }
 
 function updatePaint(dt) {
@@ -1239,7 +1263,7 @@ function updatePaint(dt) {
   if (pointer.down && pd.mode === "paint") {
     const hits = raycastFrom({ clientX: pointer.x, clientY: pointer.y }, [rock.mesh]);
     if (hits.length && hits[0].uv) {
-      rock.paintDab(hits[0].uv, G.brushColor);
+      rock.paintDab(hits[0].uv, G.brushColor, G.brushSize);
       if (Math.random() < 0.2) audio.paintDab();
       if (Math.random() < 0.12) particles.paintPuff(hits[0].point, G.brushColor);
     }
@@ -1305,7 +1329,10 @@ function setupHole(idx) {
   water.setPath(HOLES[idx].path, HOLES[idx].width);
   water.setVortex(flag.x, flag.z); // punch the lake open for the whirlpool
   world.flag.setPosition(flag.x, flag.z);
-  world.pontoon.setPose(tee.x, tee.z, Math.atan2(flag.z - tee.z, flag.x - tee.x));
+  // the deck faces down the opening leg, not the tee->flag chord: on a hole that
+  // elbows away early those two disagree and you'd launch off the side of it
+  const leg = HOLES[idx].path[1];
+  world.pontoon.setPose(tee.x, tee.z, Math.atan2(leg.z - tee.z, leg.x - tee.x));
   world.course.setHole(HOLES[idx].path, HOLES[idx].islands, HOLES[idx].rocks);
   minimap.bake(HOLES[idx].path, HOLES[idx].islands, HOLES[idx].rocks, HOLES[idx].width);
   for (const s of G.racers) {

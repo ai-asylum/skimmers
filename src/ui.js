@@ -23,6 +23,8 @@ export const els = {
   paintUi: $("paint-ui"),
   swatches: $("swatches"),
   patterns: $("patterns"),
+  brushSize: $("brush-size"),
+  brushDot: $("brush-dot"),
   results: $("results-ui"),
   resultsTitle: $("results-title"),
   resultsList: $("results-list"),
@@ -107,13 +109,14 @@ export function showStats(flat, heft, grit) {
   els.statGrit.style.width = `${Math.round(grit * 100)}%`;
 }
 
-export function buildPaintUI(colors, patterns, onColor, onPattern) {
+export function buildPaintUI({ colors, patterns, brush, selected, onColor, onPattern, onSize }) {
   els.paintUi.classList.remove("hidden");
+  els.paintUi.scrollTop = 0;
   els.swatches.innerHTML = "";
   els.patterns.innerHTML = "";
-  colors.forEach((c, i) => {
+  colors.forEach((c) => {
     const b = document.createElement("div");
-    b.className = "swatch" + (i === 0 ? " sel" : "");
+    b.className = "swatch" + (c === selected ? " sel" : "");
     b.style.background = c;
     b.onclick = () => {
       els.swatches.querySelectorAll(".swatch").forEach((x) => x.classList.remove("sel"));
@@ -133,6 +136,25 @@ export function buildPaintUI(colors, patterns, onColor, onPattern) {
     };
     els.patterns.appendChild(b);
   });
+
+  els.brushSize.min = brush.min;
+  els.brushSize.max = brush.max;
+  els.brushSize.value = brush.value;
+  const preview = () => {
+    // the dot apes the dab you are about to leave, in the paint you have loaded
+    const px = Math.round((els.brushSize.value / brush.max) * 30) + 8;
+    els.brushDot.style.width = els.brushDot.style.height = `${px}px`;
+  };
+  els.brushSize.oninput = () => {
+    preview();
+    onSize(Number(els.brushSize.value));
+  };
+  preview();
+}
+
+/** tint the brush preview dot with the paint currently loaded */
+export function setBrushColor(color) {
+  els.brushDot.style.background = color;
 }
 
 // ---------------------------------------------------------------- results

@@ -7,7 +7,7 @@ import { makeChannelCanvas } from "./channelrender.js";
 import { terrainHeightAt, LOB_CLEAR } from "./terrain.js";
 
 const SIZE = 190;
-const RANGE = 170; // world units spanned edge to edge
+const RANGE = 215; // world units spanned edge to edge — a hole runs corner to corner
 
 export class Minimap {
   constructor() {
@@ -16,6 +16,12 @@ export class Minimap {
     this.bakeCanvas = document.createElement("canvas");
     this.bakeCanvas.width = this.bakeCanvas.height = SIZE;
     this.pulse = 0;
+    // it sits small in the corner so it never covers the water you're aiming
+    // at; tap to blow it up when you actually want to read the hole
+    this.canvas.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      this.canvas.classList.toggle("big");
+    });
   }
 
   _w2m(x, z) {
@@ -50,17 +56,19 @@ export class Minimap {
       const r = (o.r / RANGE) * S;
       ctx.fillStyle = "#5d686e";
       ctx.strokeStyle = "#3c454a";
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.arc(x, y, Math.max(2.5, r), 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
 
-    // fairway path — dashed
+    // fairway path — dashed. Everything from here down is drawn deliberately
+    // chunky: the map is a 76px button until you tap it open, so a hairline
+    // reads as nothing at all.
     ctx.strokeStyle = "rgba(253,246,227,0.85)";
-    ctx.lineWidth = 2.5;
-    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 4;
+    ctx.setLineDash([8, 6]);
     ctx.lineCap = "round";
     ctx.beginPath();
     path.forEach((p, i) => {
@@ -73,7 +81,7 @@ export class Minimap {
     // islands
     for (const isl of islands) {
       const [x, y] = this._w2m(isl.x, isl.z);
-      const r = (isl.r / RANGE) * S + 2;
+      const r = (isl.r / RANGE) * S + 3;
       ctx.fillStyle = "#eed9a4";
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -88,9 +96,9 @@ export class Minimap {
     const [tx, ty] = this._w2m(path[0].x, path[0].z);
     ctx.fillStyle = "#fdf6e3";
     ctx.strokeStyle = "#16324a";
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(tx, ty, 4, 0, Math.PI * 2);
+    ctx.arc(tx, ty, 6, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
@@ -112,28 +120,28 @@ export class Minimap {
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(-b.group.rotation.y);
-      ctx.fillRect(-3.5, -1.6, 7, 3.2);
+      ctx.fillRect(-5, -2.3, 10, 4.6);
       ctx.restore();
     }
 
     // flag — pulsing ring + pennant
     const [fx, fy] = this.flagXY;
     ctx.strokeStyle = "rgba(255,210,74,0.9)";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.arc(fx, fy, 5 + Math.sin(this.pulse) * 1.6, 0, Math.PI * 2);
+    ctx.arc(fx, fy, 8 + Math.sin(this.pulse) * 2.2, 0, Math.PI * 2);
     ctx.stroke();
     ctx.fillStyle = "#ff5470";
     ctx.beginPath();
-    ctx.moveTo(fx, fy - 10);
-    ctx.lineTo(fx + 7, fy - 7);
-    ctx.lineTo(fx, fy - 4);
+    ctx.moveTo(fx, fy - 16);
+    ctx.lineTo(fx + 11, fy - 11);
+    ctx.lineTo(fx, fy - 6);
     ctx.closePath();
     ctx.fill();
     ctx.strokeStyle = "#fdf6e3";
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.moveTo(fx, fy - 10);
+    ctx.moveTo(fx, fy - 16);
     ctx.lineTo(fx, fy);
     ctx.stroke();
 
@@ -143,9 +151,9 @@ export class Minimap {
       const [x, y] = this._w2m(s.pos.x, s.pos.z);
       ctx.fillStyle = s.tint;
       ctx.strokeStyle = "rgba(22,50,74,0.8)";
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
@@ -153,15 +161,15 @@ export class Minimap {
       const [x, y] = this._w2m(player.pos.x, player.pos.z);
       ctx.fillStyle = "#ffd24a";
       ctx.strokeStyle = "#16324a";
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+      ctx.arc(x, y, 7, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
       ctx.strokeStyle = "rgba(255,210,74,0.65)";
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(x, y, 7.5 + Math.sin(this.pulse * 1.3) * 1.2, 0, Math.PI * 2);
+      ctx.arc(x, y, 12 + Math.sin(this.pulse * 1.3) * 1.8, 0, Math.PI * 2);
       ctx.stroke();
     }
   }

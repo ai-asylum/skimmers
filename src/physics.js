@@ -19,9 +19,25 @@ import { terrainHeightAt } from "./terrain.js";
 
 export const GRAVITY = 14;
 export const MAX_SPEED = 27;
-export const SKIP_ELEV = 0.16; // radians above horizontal for a skip throw
+export const SKIP_ELEV = 0.16; // radians above horizontal for a flat skip throw
 export const LOB_ELEV = 0.92; // radians for a splash lob
+export const MAX_ELEV = 1.30; // steepest the player can aim — near enough straight up
+export const PLOP_ELEV = 0.55; // above this the stone comes down flat and settles
 export const BLAST_R = 2.6; // splash lob knock radius
+
+/**
+ * Launch angle for a throw. The player aims this directly (main.js maps the
+ * vertical half of the drag onto SKIP_ELEV..MAX_ELEV); pass null and you get
+ * the old mode default, which is what the bots throw on. A splash lob never
+ * comes out flatter than its own arc, since arcing over the spires is the
+ * whole point of it.
+ */
+export function launchElev(power, mode, elev = null) {
+  const base = elev == null
+    ? (mode === "skip" ? SKIP_ELEV + 0.10 * (1 - power) : LOB_ELEV)
+    : elev;
+  return mode === "skip" ? base : Math.max(base, LOB_ELEV);
+}
 
 // A holed-out stone slides down the vortex wall and ends up circling in the
 // mouth of the throat. It rides the surface offset outward by roughly its own
@@ -66,6 +82,7 @@ export class Skimmer {
     this.boat = null; // riding a boat
     this.boatLocal = new THREE.Vector3();
     this.lastThrowMode = "skip";
+    this.lastThrowElev = SKIP_ELEV;
     this.sinkT = 0;
     this.bobPhase = Math.random() * 10;
     this.restY = 0.06; // rest height above the waves (raised on the buoy / tee bridge)
@@ -111,13 +128,16 @@ export class Skimmer {
 
   _emit(type, data) { this.onEvent?.(type, { skimmer: this, ...data }); }
 
-  /** launch from current rest position. dirXZ is a normalized horizontal aim. */
-  throwRock(dirXZ, power, mode = "skip") {
+  /**
+   * Launch from current rest position. dirXZ is a normalized horizontal aim;
+   * `elev` is the aimed launch angle in radians (null = the mode's default).
+   */
+  throwRock(dirXZ, power, mode = "skip", elev = null) {
     if (this.state !== "resting" && this.state !== "beached" && this.state !== "onboat") return false;
     if (this.boat) { this.boat = null; } // leaving the ferry
-    const elev = mode === "skip" ? SKIP_ELEV + 0.10 * (1 - power) : LOB_ELEV;
+    const e = launchElev(power, mode, elev);
     const speed = MAX_SPEED * (0.28 + 0.72 * power) * (mode === "skip" ? 1 : 0.68);
-    const cosE = Math.cos(elev), sinE = Math.sin(elev);
+    const cosE = Math.cos(e), sinE = Math.sin(e);
     this.vel.set(dirXZ.x * cosE * speed, sinE * speed, dirXZ.z * cosE * speed);
     this.pos.y = Math.max(this.pos.y, WATER_Y + 0.5); // buoy/bridge lies launch from their height
     this.restY = 0.06;
@@ -127,6 +147,7 @@ export class Skimmer {
     this.totalThrows++;
     this.spin = 14 + power * 22;
     this.lastThrowMode = mode;
+    this.lastThrowElev = e;
     this.rock.kickEyes(1.2);
     this.rock.squashKick?.(0.5);
     this.tape = [];
@@ -386,8 +407,14 @@ export class Skimmer {
 
     const critAngle = 0.30 + flat * 0.30; // ~17°..34°
     const minSkipSpeed = 5.6 - flat * 1.8;
+    // A throw aimed up over PLOP_ELEV was never going to skip and you knew it:
+    // it comes down flat, on purpose, so it lands where you put it instead of
+    // glugging under. That is what makes a high lob a real shot rather than a
+    // misjudged skipper — the ledge and the pocket behind a spire become
+    // targets you can just drop onto.
+    const lofted = this.lastThrowElev > PLOP_ELEV;
 
-    if (angle < critAngle && hSpeed > minSkipSpeed) {
+    if (!lofted && angle < critAngle && hSpeed > minSkipSpeed) {
       // SKIP — reflect with restitution, bleed horizontal speed
       this.skips++;
       this.bestCombo = Math.max(this.bestCombo, this.skips);
@@ -402,8 +429,8 @@ export class Skimmer {
       this.tapeSkips.push(this.tape.length - 1);
       this._emit("skip", { at: this.pos.clone(), n: this.skips, speed: hSpeed });
       this._checkFlag(ctx, false);
-    } else if (hSpeed <= Math.max(2.6, minSkipSpeed * 0.75) && angle < 0.9) {
-      // ran out of steam — settle and float
+    } else if (lofted || (hSpeed <= Math.max(2.6, minSkipSpeed * 0.75) && angle < 0.9)) {
+      // ran out of steam, or came down flat off a lob — settle and float
       this.pos.y = waterY + 0.06;
       this.vel.set(0, 0, 0);
       this.state = "resting";
@@ -504,12 +531,13 @@ Skimmer.prototype._waterContact = function (ctx, waterY) {
  * Dry-run a throw with the same maths for the aim preview.
  * Returns { points: Vector3[], skips: Vector3[], end: 'rest'|'sink'|'flying' }.
  */
-export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed, maxT = 6, islands = null, rocks = null) {
+export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed, maxT = 6, islands = null, rocks = null, aimElev = null) {
   const s = {
     pos: startPos.clone(),
     vel: new THREE.Vector3(),
   };
-  const elev = mode === "skip" ? SKIP_ELEV + 0.10 * (1 - power) : LOB_ELEV;
+  const elev = launchElev(power, mode, aimElev);
+  const lofted = elev > PLOP_ELEV;
   const speed = MAX_SPEED * (0.28 + 0.72 * power) * (mode === "skip" ? 1 : 0.68);
   s.vel.set(dirXZ.x * Math.cos(elev) * speed, Math.sin(elev) * speed, dirXZ.z * Math.cos(elev) * speed);
   s.pos.y = Math.max(s.pos.y, WATER_Y + 0.5); // match throwRock: hilltops launch from up there
@@ -560,7 +588,7 @@ export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed
       if (mode === "splash") { end = "blast"; skips.push(s.pos.clone()); break; }
       const critAngle = 0.30 + flat * 0.30;
       const minSkipSpeed = 5.6 - flat * 1.8;
-      if (angle < critAngle && hSpeed > minSkipSpeed) {
+      if (!lofted && angle < critAngle && hSpeed > minSkipSpeed) {
         skipCount++;
         skips.push(s.pos.clone());
         const rest = 0.5 + flat * 0.22;
@@ -569,7 +597,7 @@ export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed
         s.vel.x *= keep; s.vel.z *= keep;
         s.pos.y = wy + 0.19;
         if (skipCount > 14) { end = "rest"; break; }
-      } else if (hSpeed <= Math.max(2.6, minSkipSpeed * 0.75) && angle < 0.9) {
+      } else if (lofted || (hSpeed <= Math.max(2.6, minSkipSpeed * 0.75) && angle < 0.9)) {
         end = "rest";
         points.push(s.pos.clone());
         break;

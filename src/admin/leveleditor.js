@@ -14,7 +14,9 @@ import { buoysAlong, arrangeRocksAroundBuoys } from "../course.js";
 // mirror of water.js constants (kept light so admin doesn't bundle three.js)
 const LAKE_R = 64;
 const CHANNEL_W = 13;
-const VIEW_R = LAKE_R * 1.4;
+// holes run corner to corner now, well past the lake radius (terrain.js pulls
+// the mountain ring back around the channel), so the editor has to show that
+const VIEW_R = LAKE_R * 1.7;
 const STORE_KEY = "skippidy.holes.draft";
 
 export function initLevelEditor(panel) {

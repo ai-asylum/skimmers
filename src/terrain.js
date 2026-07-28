@@ -35,9 +35,12 @@ const HILL_H = 18; // tallest bank hill
 export const LOB_CLEAR = 8;
 
 // The tee bridge (world.js Pontoon) runs ~22u back from the first waypoint,
-// directly away from the flag. Flatten an apron under it so the banks don't
-// swallow the deck the player launches from.
+// directly away from the opening leg. Flatten an apron under it so the banks
+// don't swallow the deck the player launches from.
 const TEE_BACK = 23, TEE_HALF = 5.5;
+
+/** how close to the fairway the mountain ring is not allowed to encroach */
+const MOUNT_INSET = 34;
 
 // module state (mirrors the shader's path so JS height matches the visuals)
 let _path = null;
@@ -49,8 +52,8 @@ export function setTerrainPath(path, halfWidth = CHANNEL_W) {
   _path = path && path.length >= 2 ? path.map((p) => ({ x: p.x, z: p.z })) : null;
   _halfW = halfWidth;
   if (_path) {
-    const tee = _path[0], flag = _path[_path.length - 1];
-    const dx = flag.x - tee.x, dz = flag.z - tee.z;
+    const tee = _path[0], next = _path[1];
+    const dx = next.x - tee.x, dz = next.z - tee.z;
     const l = Math.hypot(dx, dz) || 1;
     _tee = { x: tee.x, z: tee.z, ux: -dx / l, uz: -dz / l };
   } else {
@@ -115,9 +118,13 @@ function sample(x, z) {
     y = (hillsAt(x, z) + detail) * ramp;
     kind = "grass";
   }
-  // distant mountains ring the whole map by radius (keeps the familiar bowl)
-  if (r > LAKE_R) {
-    const dm = r - LAKE_R;
+  // Distant mountains ring the whole map by radius, keeping the familiar bowl.
+  // A hole runs the full width of the map now, so where the fairway pushes past
+  // the lake radius the ring gives way to it: the rise is held off until you are
+  // MOUNT_INSET clear of the channel, and the corridor stays playable instead of
+  // ending inside a peak.
+  const dm = _path ? Math.min(r - LAKE_R, d - MOUNT_INSET) : r - LAKE_R;
+  if (dm > 0) {
     const a = Math.atan2(z, x);
     y += Math.min(26, Math.pow(dm * 0.16, 1.55)) + Math.sin(a * 7 + dm * 0.14) * Math.min(2.5, dm * 0.05);
     if (kind === "bed") kind = "grass";
@@ -310,9 +317,10 @@ function patchGroundTex(mat) {
 }
 
 // Grid density is biased toward the middle of the map: the playfield gets
-// ~1u quads so the hills collide the way they look, while the outer mountain
-// ring coasts along on big ones.
-const CENTER_BIAS = 0.42;
+// small quads so the hills collide the way they look, while the outer mountain
+// ring coasts along on big ones. Holes now reach ~86u out, so the fine band has
+// to stretch that far — hence a weaker bias than a lake-sized playfield needs.
+const CENTER_BIAS = 0.55;
 const gridWarp = (u) => u * (CENTER_BIAS + (1 - CENTER_BIAS) * u * u * u * u);
 
 export class Terrain {

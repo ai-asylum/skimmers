@@ -42,7 +42,9 @@ function makeClumpGeometry(height, width) {
 }
 
 export class Grass {
-  constructor(scene, { count = 8000, height = 1.15, bladeWidth = 0.17, color = 0x86b84f } = {}) {
+  // count scales with the scattered area (see setHole's maxR) so a hole that
+  // runs corner to corner isn't grassed thinner than a compact one was
+  constructor(scene, { count = 11000, height = 1.15, bladeWidth = 0.17, color = 0x86b84f } = {}) {
     this.cap = count;
     this.uTime = { value: 0 };
     this.uWind = { value: 0.22 };
@@ -93,7 +95,9 @@ uniform float uTime; uniform float uWind; uniform float uWindSpeed; uniform vec2
   /** re-scatter blades over the grassy banks of the current hole */
   setHole() {
     const dummy = this._dummy;
-    const maxR = LAKE_R * 1.35; // keep grass around the playfield, not out on the far peaks
+    // reaches the far ends of a corner-to-corner hole without running out onto
+    // the peaks (terrain.js holds the mountain ring back around the channel)
+    const maxR = LAKE_R * 1.7;
     let placed = 0, guard = 0;
     while (placed < this.cap && guard++ < this.cap * 8) {
       const a = Math.random() * Math.PI * 2;

@@ -91,8 +91,10 @@
     padding: 6px 18px; border-radius: 20px;
   }
   #phase-bottom {
-    position: absolute; bottom: 4vh; left: 0; right: 0;
-    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    position: absolute; left: 0; right: 0;
+    bottom: max(12px, calc(3vh + env(safe-area-inset-bottom)));
+    padding: 0 10px;
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
   }
 
   /* stat bars for the rock */
@@ -105,15 +107,33 @@
   .stat.flat .bar i { background: var(--accent2); }
   .stat.grit .bar i { background: var(--gold); }
 
-  /* paint palette */
-  #paint-ui { display: flex; flex-direction: column; gap: 12px; align-items: center; }
-  .swatch-row { display: flex; gap: 10px; }
+  /* paint palette — a panel that scrolls instead of growing off a small screen */
+  #paint-ui {
+    display: flex; flex-direction: column; gap: 8px;
+    width: min(560px, 94vw); max-height: min(44vh, 300px);
+    overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+    padding: 10px 12px; border-radius: 20px; border: 3px solid var(--ink);
+    background: rgba(253,246,227,0.92); pointer-events: auto;
+    box-shadow: 0 4px 0 rgba(22,50,74,0.6), 0 10px 20px rgba(0,0,0,0.3);
+  }
+  .palette-row {
+    display: flex; gap: 10px; padding: 6px 2px;
+    overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch;
+  }
+  /* rows keep their full height so a cramped panel scrolls instead of squashing */
+  .palette-row, .brush-row { flex: 0 0 auto; }
+  .palette-row > * { flex: 0 0 auto; }
+  #paint-ui, .palette-row { scrollbar-width: thin; scrollbar-color: rgba(22,50,74,0.45) transparent; }
+  #paint-ui::-webkit-scrollbar, .palette-row::-webkit-scrollbar { width: 6px; height: 6px; }
+  #paint-ui::-webkit-scrollbar-thumb, .palette-row::-webkit-scrollbar-thumb {
+    background: rgba(22,50,74,0.4); border-radius: 3px;
+  }
   .swatch {
     width: 44px; height: 44px; border-radius: 50%; border: 3px solid var(--ink); cursor: pointer;
     box-shadow: 0 3px 0 rgba(0,0,0,0.4); transition: transform 0.1s ease; pointer-events: auto;
   }
-  .swatch:hover { transform: scale(1.15) rotate(6deg); }
-  .swatch.sel { outline: 4px solid var(--paper); transform: scale(1.18); }
+  .swatch:hover { transform: scale(1.12) rotate(6deg); }
+  .swatch.sel { outline: 3px solid var(--gold); transform: scale(1.12); }
   .pattern-chip {
     padding: 8px 16px; border-radius: 14px; border: 3px solid var(--ink); background: var(--paper);
     font-weight: 900; font-size: 14px; cursor: pointer; box-shadow: 0 3px 0 rgba(0,0,0,0.35);
@@ -122,16 +142,67 @@
   .pattern-chip:hover { transform: translateY(-2px); }
   .pattern-chip.sel { background: var(--gold); }
 
+  /* brush size */
+  .brush-row { display: flex; align-items: center; gap: 12px; padding: 2px 4px 4px; }
+  .brush-row label { font-size: 12px; font-weight: 900; letter-spacing: 0.1em; }
+  #brush-dot {
+    flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent); border: 2.5px solid var(--ink);
+    transition: width 0.08s ease, height 0.08s ease;
+  }
+  #brush-size {
+    flex: 1; min-width: 0; height: 30px; margin: 0; background: none;
+    -webkit-appearance: none; appearance: none; cursor: pointer;
+    pointer-events: auto; touch-action: none;
+  }
+  #brush-size::-webkit-slider-runnable-track {
+    height: 10px; border-radius: 6px; background: #d8ccb1; border: 2px solid var(--ink);
+  }
+  #brush-size::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 26px; height: 26px; margin-top: -10px; border-radius: 50%;
+    background: var(--gold); border: 3px solid var(--ink); box-shadow: 0 2px 0 rgba(0,0,0,0.35);
+  }
+  #brush-size::-moz-range-track {
+    height: 10px; border-radius: 6px; background: #d8ccb1; border: 2px solid var(--ink);
+  }
+  #brush-size::-moz-range-thumb {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--gold); border: 3px solid var(--ink);
+  }
+
+  @media (max-width: 560px) {
+    #paint-ui { gap: 6px; padding: 8px 10px; }
+    .swatch { width: 38px; height: 38px; border-width: 2.5px; }
+    .pattern-chip { padding: 7px 12px; font-size: 12px; border-width: 2.5px; }
+    #rock-stats { gap: 10px; padding: 10px 14px; }
+    .stat { min-width: 66px; }
+  }
+  @media (max-height: 560px) {
+    #phase-title { margin-top: 1.5vh; }
+    #paint-ui { max-height: 50vh; gap: 4px; padding: 6px 10px; }
+    .palette-row { padding: 4px 2px; }
+    .brush-row { padding: 0 4px 2px; }
+  }
+
   /* ---------- race HUD ---------- */
   #race-hud { z-index: 20; }
 
-  /* minimap — lives top-right where the scoreboard used to be */
+  /* minimap — lives top-right where the scoreboard used to be. Small enough to
+     stay out of the way of the throw, tap it to read the hole properly. */
   #minimap {
     position: absolute; right: 14px; top: 64px;
-    width: 152px; height: 152px;
-    border-radius: 50%; border: 3px solid rgba(253,246,227,0.55);
-    box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+    width: 76px; height: 76px;
+    border-radius: 50%; border: 2px solid rgba(253,246,227,0.55);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
     background: rgba(10,42,61,0.5);
+    pointer-events: auto; cursor: pointer;
+    transition: width 0.18s ease, height 0.18s ease, border-width 0.18s ease;
+  }
+  #minimap.big {
+    width: 160px; height: 160px;
+    border-width: 3px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.45);
   }
 
   /* power + mode */
@@ -343,7 +414,7 @@
 <div id="race-hud" class="layer hidden">
   <canvas id="minimap" width="190" height="190"></canvas>
   <div id="throw-ui">
-    <div id="throw-hint">drag back &amp; release to skip</div>
+    <div id="throw-hint">drag back to skip, forward to lob</div>
   </div>
 </div>
 
@@ -361,8 +432,14 @@
       <div class="stat grit"><label>GRIT</label><div class="bar"><i id="stat-grit"></i></div></div>
     </div>
     <div id="paint-ui" class="hidden">
-      <div class="swatch-row" id="swatches"></div>
-      <div class="swatch-row" id="patterns"></div>
+      <div class="palette-row" id="swatches"></div>
+      <div class="palette-row" id="patterns"></div>
+      <div class="brush-row">
+        <label for="brush-size">BRUSH</label>
+        <input id="brush-size" type="range" min="4" max="42" step="1" value="13"
+               aria-label="brush size">
+        <span id="brush-dot"></span>
+      </div>
     </div>
     <button id="phase-next" class="btn small hidden">Next →</button>
   </div>
