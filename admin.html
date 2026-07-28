@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skippidy Skip — Admin</title>
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<style>
+  :root {
+    --ink: #16324a;
+    --paper: #fdf6e3;
+    --accent: #ff8a3d;
+    --accent2: #37c8e0;
+    --gold: #ffd24a;
+    --danger: #ff5470;
+    --panel: #123043;
+    --panel2: #0c2434;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; min-height: 100%; }
+  body {
+    font-family: "Trebuchet MS", "Comic Sans MS", cursive, sans-serif;
+    color: var(--paper);
+    background: #0a2a3d radial-gradient(ellipse at 50% -10%, rgba(55,200,224,0.18), transparent 60%);
+    min-height: 100vh;
+  }
+
+  header.admin-bar {
+    display: flex; align-items: center; gap: 18px;
+    padding: 14px 22px;
+    background: linear-gradient(180deg, rgba(0,0,0,0.25), transparent);
+    border-bottom: 2px solid rgba(255,255,255,0.08);
+  }
+  header.admin-bar .brand {
+    font-weight: 900; letter-spacing: 0.04em; font-size: 22px;
+    color: var(--paper); -webkit-text-stroke: 1px var(--ink);
+    display: flex; align-items: center; gap: 10px;
+  }
+  header.admin-bar .brand .dot { color: var(--gold); }
+  header.admin-bar .spacer { flex: 1; }
+  header.admin-bar a.home {
+    color: var(--accent2); text-decoration: none; font-weight: 700; font-size: 14px;
+    opacity: 0.85;
+  }
+  header.admin-bar a.home:hover { opacity: 1; }
+
+  nav.tabs {
+    display: flex; gap: 6px; padding: 0 18px; margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  nav.tabs .tab {
+    cursor: pointer; border: none;
+    font-family: inherit; font-weight: 800; letter-spacing: 0.04em;
+    font-size: 15px; color: var(--paper);
+    background: var(--panel);
+    padding: 11px 22px; border-radius: 12px 12px 0 0;
+    border: 2px solid transparent; border-bottom: none;
+    opacity: 0.6; transition: all 0.12s ease;
+  }
+  nav.tabs .tab:hover { opacity: 0.9; }
+  nav.tabs .tab.active {
+    opacity: 1; background: var(--panel2);
+    border-color: rgba(255,255,255,0.12);
+    color: var(--gold);
+  }
+
+  main { padding: 0 18px 40px; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* generic controls */
+  .btn {
+    cursor: pointer; border: none; font-family: inherit;
+    font-weight: 800; letter-spacing: 0.03em; font-size: 14px;
+    color: var(--ink); background: var(--gold);
+    padding: 9px 18px; border-radius: 10px;
+    box-shadow: 0 3px 0 #c99a1d; transition: transform 0.06s ease, box-shadow 0.06s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn:active { transform: translateY(3px); box-shadow: 0 0 0 #c99a1d; }
+  .btn.blue { background: var(--accent2); box-shadow: 0 3px 0 #1d8fa3; color: var(--ink); }
+  .btn.ghost { background: rgba(255,255,255,0.08); color: var(--paper); box-shadow: none; border: 1px solid rgba(255,255,255,0.15); }
+
+  /* ---------- Eyes lab ---------- */
+  .eyes-layout {
+    display: grid; grid-template-columns: 220px 1fr 230px 230px; gap: 18px;
+    align-items: start; margin-top: 18px;
+  }
+  @media (max-width: 1240px) { .eyes-layout { grid-template-columns: 220px 1fr 240px; } }
+  @media (max-width: 980px) { .eyes-layout { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel2); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 14px; padding: 16px;
+  }
+  .card h3 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--accent2); margin-bottom: 12px; opacity: 0.9;
+  }
+
+  #expr-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  }
+  .expr-thumb {
+    aspect-ratio: 4/3.55; border-radius: 10px; cursor: pointer;
+    background: #eef4f7 center/85% no-repeat;
+    border: 2px solid transparent; transition: border-color 0.1s, transform 0.08s;
+    position: relative;
+  }
+  .expr-thumb:hover { transform: translateY(-2px); }
+  .expr-thumb.sel { border-color: var(--gold); }
+  .expr-thumb .lbl {
+    position: absolute; bottom: 2px; left: 0; right: 0; text-align: center;
+    font-size: 9px; color: var(--ink); font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.02em; opacity: 0.65;
+  }
+
+  .stage-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  #stage {
+    position: relative; width: 100%; max-width: 560px; aspect-ratio: 4/3.55;
+    border-radius: 18px; overflow: hidden;
+    background:
+      radial-gradient(ellipse at 50% 42%, #9fb0b8 0%, #7d8f97 55%, #5f7079 100%);
+    box-shadow: inset 0 8px 30px rgba(0,0,0,0.25), 0 10px 30px rgba(0,0,0,0.4);
+    cursor: none;
+  }
+  #stage.rock-off { background: #12303f; }
+  #stage-expr, #stage-gl, #stage-ui, #stage-3d {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+  }
+  #stage-expr { object-fit: contain; z-index: 1; pointer-events: none; }
+  #stage-gl { z-index: 2; pointer-events: none; } /* pupils sit on the eye-white */
+  #stage-ui { z-index: 3; }                        /* draggable anchors on top */
+  #stage-3d { z-index: 4; display: none; cursor: grab; }
+  #stage-3d:active { cursor: grabbing; }
+  #stage.view-3d { cursor: default; }              /* the 3D canvas owns the cursor */
+  #stage.view-3d #stage-3d { display: block; }
+  #stage.view-3d #stage-expr,
+  #stage.view-3d #stage-gl,
+  #stage.view-3d #stage-ui { display: none; }
+  .stage-hint { font-size: 12px; opacity: 0.6; }
+
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: flex; justify-content: space-between; font-size: 12px;
+    font-weight: 700; margin-bottom: 5px; color: var(--paper); opacity: 0.85;
+  }
+  .field label .val { color: var(--gold); }
+  .field input[type=range] { width: 100%; accent-color: var(--accent2); }
+  .field input[type=color] {
+    width: 100%; height: 32px; border: none; border-radius: 8px; background: none; cursor: pointer;
+  }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .toggle input { width: 16px; height: 16px; accent-color: var(--accent2); }
+
+  /* per-expression enable toggle on each thumbnail */
+  .expr-thumb .en {
+    position: absolute; top: 4px; left: 4px; width: 15px; height: 15px; margin: 0;
+    accent-color: var(--accent2); cursor: pointer; z-index: 2;
+    filter: drop-shadow(0 1px 1px rgba(0,0,0,0.5));
+  }
+  .expr-thumb.off { opacity: 0.4; filter: grayscale(0.85); }
+  .expr-thumb.off .lbl { opacity: 1; }
+  .expr-thumb.off::after {
+    content: "off"; position: absolute; top: 3px; right: 5px;
+    font-size: 8px; font-weight: 900; color: var(--danger);
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+
+  /* ---------- Grid aligner ---------- */
+  .grid-lab { margin-top: 18px; }
+  .grid-lab-body { display: grid; grid-template-columns: minmax(240px, 460px) 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 760px) { .grid-lab-body { grid-template-columns: 1fr; } }
+  .grid-sheet-wrap { display: flex; flex-direction: column; gap: 8px; }
+  #grid-sheet {
+    width: 100%; display: block; border-radius: 10px; cursor: crosshair;
+    background: #0b2230 repeating-conic-gradient(#12303f 0% 25%, #0d2735 0% 50%) 50% / 20px 20px;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+  .grid-ctls .field.mini { margin-bottom: 9px; }
+  .grid-ctls .field.mini label { font-size: 11px; }
+  .grid-ctls .row { gap: 12px; }
+
+  /* ---------- Alignment ---------- */
+  .align .field.mini { margin-bottom: 9px; }
+  .align .field.mini label { font-size: 11px; }
+  .align h3 .face { color: var(--gold); text-transform: none; letter-spacing: 0; }
+  .align .note { font-size: 11px; opacity: 0.55; line-height: 1.45; margin-top: 10px; }
+  .align .btn { font-size: 11px; padding: 6px 9px; }
+</style>
+</head>
+<body>
+  <header class="admin-bar">
+    <div class="brand"><span class="dot">●</span> Skippidy Admin</div>
+    <div class="spacer"></div>
+    <a class="home" href="./index.html">← back to game</a>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="level">Level Editor</button>
+    <button class="tab" data-tab="eyes">Eyes Lab</button>
+  </nav>
+
+  <main>
+    <section class="tab-panel active" id="tab-level"></section>
+
+    <section class="tab-panel" id="tab-eyes">
+      <div class="eyes-layout">
+        <!-- Expression picker -->
+        <div class="card">
+          <h3>Expression</h3>
+          <div id="expr-grid"></div>
+        </div>
+
+        <!-- Preview stage -->
+        <div class="stage-wrap">
+          <div id="stage" class="card" style="padding:0;">
+            <canvas id="stage-gl"></canvas>
+            <img id="stage-expr" alt="expression outline">
+            <canvas id="stage-ui"></canvas>
+            <canvas id="stage-3d"></canvas>
+          </div>
+          <div class="stage-hint">move your cursor over the rock — the pupils follow it</div>
+        </div>
+
+        <!-- Controls -->
+        <div class="card">
+          <h3>Pupil</h3>
+          <div class="field">
+            <label>Pupil size <span class="val" id="v-psize">42%</span></label>
+            <input type="range" id="c-psize" min="10" max="80" value="42">
+          </div>
+          <div class="field">
+            <label>Follow strength <span class="val" id="v-follow">100%</span></label>
+            <input type="range" id="c-follow" min="0" max="100" value="100">
+          </div>
+          <div class="field">
+            <label>Iris color</label>
+            <input type="color" id="c-iris" value="#2b2b32">
+          </div>
+          <div class="field">
+            <label>Iris tint / glow</label>
+            <input type="color" id="c-tint" value="#3aa0ff">
+          </div>
+          <div class="field">
+            <label>Gloss <span class="val" id="v-gloss">70%</span></label>
+            <input type="range" id="c-gloss" min="0" max="100" value="70">
+          </div>
+
+          <h3 style="margin-top:18px;">Setup</h3>
+          <label class="toggle"><input type="checkbox" id="c-3d"> 3D rock view (like the game)</label>
+          <label class="toggle" style="margin-top:8px;"><input type="checkbox" id="c-rock" checked> Show rock backdrop</label>
+          <label class="toggle" style="margin-top:8px;"><input type="checkbox" id="c-anchors" checked> Drag eye anchors on the stage</label>
+        </div>
+
+        <!-- Alignment: where the pupils sit, per face and globally -->
+        <div class="card align">
+          <h3>Align <span class="face" id="a-face">neutral</span></h3>
+          <div class="field mini">
+            <label>Nudge X <span class="val" id="v-ax">0.000</span></label>
+            <input type="range" id="a-x" min="-0.2" max="0.2" step="0.002" value="0">
+          </div>
+          <div class="field mini">
+            <label>Nudge Y <span class="val" id="v-ay">0.000</span></label>
+            <input type="range" id="a-y" min="-0.2" max="0.2" step="0.002" value="0">
+          </div>
+          <div class="field mini">
+            <label>Socket size <span class="val" id="v-ar">100%</span></label>
+            <input type="range" id="a-r" min="30" max="200" step="1" value="100">
+          </div>
+          <div class="row">
+            <button class="btn ghost" id="a-detect">Auto-detect</button>
+            <button class="btn ghost" id="a-reset">Reset face</button>
+          </div>
+
+          <h3 style="margin-top:18px;">Trim every face</h3>
+          <div class="field mini">
+            <label>X <span class="val" id="v-tx">0.000</span></label>
+            <input type="range" id="t-x" min="-0.15" max="0.15" step="0.002" value="0">
+          </div>
+          <div class="field mini">
+            <label>Y <span class="val" id="v-ty">0.000</span></label>
+            <input type="range" id="t-y" min="-0.15" max="0.15" step="0.002" value="0">
+          </div>
+          <div class="field mini">
+            <label>Size <span class="val" id="v-ts">100%</span></label>
+            <input type="range" id="t-s" min="50" max="150" step="1" value="100">
+          </div>
+          <div class="row">
+            <button class="btn ghost" id="a-detect-all">Auto-detect all</button>
+            <button class="btn ghost" id="a-reset-all">Reset all</button>
+          </div>
+          <div class="row" style="margin-top:12px;">
+            <button class="btn blue" id="c-export">Copy sockets for eyeconfig.js</button>
+          </div>
+          <p class="note">
+            Edits save as you make them, so a game tab open beside this picks
+            them up live. Paste the copied block into <code>src/eyeconfig.js</code>
+            to make it stick, or run <code>node scripts/measure-eyes.mjs</code>
+            to re-measure the whole sheet from scratch.
+          </p>
+        </div>
+      </div>
+
+      <!-- Grid aligner + expression enable/disable -->
+      <div class="grid-lab card">
+        <h3>Sheet grid &amp; expressions</h3>
+        <div class="grid-lab-body">
+          <div class="grid-sheet-wrap">
+            <canvas id="grid-sheet"></canvas>
+            <p class="stage-hint">Click a cell to preview it. Tick the box on a thumbnail to enable/disable an expression. Drag the sliders to realign the grid over the sheet.</p>
+          </div>
+          <div class="grid-ctls">
+            <div class="row">
+              <div class="field mini" style="flex:1;">
+                <label>Columns <span class="val" id="v-cols">4</span></label>
+                <input type="range" id="g-cols" min="1" max="8" step="1" value="4">
+              </div>
+              <div class="field mini" style="flex:1;">
+                <label>Rows <span class="val" id="v-rows">3</span></label>
+                <input type="range" id="g-rows" min="1" max="8" step="1" value="3">
+              </div>
+            </div>
+            <div class="field mini"><label>Left inset <span class="val" id="v-gl">0%</span></label><input type="range" id="g-left" min="0" max="40" step="0.5" value="0"></div>
+            <div class="field mini"><label>Top inset <span class="val" id="v-gt">0%</span></label><input type="range" id="g-top" min="0" max="40" step="0.5" value="0"></div>
+            <div class="field mini"><label>Right inset <span class="val" id="v-gr">0%</span></label><input type="range" id="g-right" min="0" max="40" step="0.5" value="0"></div>
+            <div class="field mini"><label>Bottom inset <span class="val" id="v-gb">0%</span></label><input type="range" id="g-bottom" min="0" max="40" step="0.5" value="0"></div>
+            <div class="row">
+              <div class="field mini" style="flex:1;"><label>Gap X <span class="val" id="v-gx">0%</span></label><input type="range" id="g-gapx" min="0" max="60" step="1" value="0"></div>
+              <div class="field mini" style="flex:1;"><label>Gap Y <span class="val" id="v-gy">0%</span></label><input type="range" id="g-gapy" min="0" max="60" step="1" value="0"></div>
+            </div>
+            <div class="row" style="margin-top:6px;">
+              <button class="btn ghost" id="g-reset">Reset grid</button>
+              <button class="btn ghost" id="g-all-on">Enable all</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/src/admin/main.js"></script>
+</body>
+</html>

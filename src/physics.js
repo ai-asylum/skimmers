@@ -7,9 +7,15 @@
  * Flat, fast throws chain hops. Splash lobs detonate on impact and knock
  * rival stones under. simulateThrow() runs the identical step for the
  * aiming preview, so the dots never lie.
+ *
+ * The hole is a whirlpool, and taking it is a water-contact test (_checkFlag):
+ * the stone has to touch down inside the rim. Flying over the top never counts.
  */
 import * as THREE from "three";
-import { LAKE_R, WATER_Y, lakeDepthAt } from "./water.js";
+import {
+  WATER_Y, lakeDepthAt, sunkRestY, isWaterAt, vortexSurfaceY,
+} from "./water.js";
+import { terrainHeightAt } from "./terrain.js";
 
 export const GRAVITY = 14;
 export const MAX_SPEED = 27;
@@ -17,7 +23,16 @@ export const SKIP_ELEV = 0.16; // radians above horizontal for a skip throw
 export const LOB_ELEV = 0.92; // radians for a splash lob
 export const BLAST_R = 2.6; // splash lob knock radius
 
+// A holed-out stone slides down the vortex wall and ends up circling in the
+// mouth of the throat. It rides the surface offset outward by roughly its own
+// half-width, so its far edge rests on the wall rather than punching through it,
+// and it stops where the funnel is still wider than the stone is.
+const WHIRL_ORBIT_R = 0.8;
+const WHIRL_STONE_R = 0.8; // how far out along the wall the stone's edge sits
+const WHIRL_SINK = 0.3;
+
 const _tmp = new THREE.Vector3();
+const _prev = new THREE.Vector3(); // position at the top of this frame's flight step
 
 /** cylinder test against a hole's big rock outcrops */
 function hitOutcrop(pos, rocks) {
@@ -40,7 +55,7 @@ export class Skimmer {
 
     this.pos = new THREE.Vector3();
     this.vel = new THREE.Vector3();
-    this.state = "resting"; // resting | flying | sinking | fishing | beached | onboat | done
+    this.state = "resting"; // resting | flying | sinking | fishing | beached | onboat | whirl
     this.skips = 0; // hops in the current throw
     this.bestCombo = 0;
     this.throws = 0; // this hole
@@ -55,6 +70,8 @@ export class Skimmer {
     this.bobPhase = Math.random() * 10;
     this.restY = 0.06; // rest height above the waves (raised on the buoy / tee bridge)
     this.hookedByLine = false; // a rival fishing line is reeling this stone up
+    this.gazeAt = null; // rival stone this one is eyeing right now (driven by main)
+    this.gazeT = 0; // countdown to the next glance
     this.knocked = false; // sunk because a rival splashed us
     this.onEvent = null; // (type, data) => {}
     // networking
@@ -67,6 +84,10 @@ export class Skimmer {
   }
 
   get mesh() { return this.rock.group; }
+
+  // still parked on the starting tee bridge — hasn't thrown this hole yet, so
+  // it's off-limits to rival splash knocks (no getting blasted before you play)
+  get onStartBridge() { return this.state === "resting" && this.throws === 0; }
 
   placeAt(x, z) {
     this.pos.set(x, WATER_Y + 0.1, z);
@@ -121,6 +142,7 @@ export class Skimmer {
 
     switch (this.state) {
       case "flying": {
+        _prev.copy(this.pos);
         this.vel.y -= GRAVITY * dt;
         this.pos.addScaledVector(this.vel, dt);
         this.spin = Math.max(2, this.spin - dt * 6);
@@ -156,7 +178,7 @@ export class Skimmer {
 
         // boat collision
         if (ctx.boats) {
-          const hit = ctx.boats.collide(this.pos, this.vel, 0.45);
+          const hit = ctx.boats.collide(this.pos, this.vel, 0.45, _prev);
           if (hit?.type === "hull") {
             // BOING — elastic rebound off the hull; bank shots keep the chain
             const n = hit.normal;
@@ -172,15 +194,15 @@ export class Skimmer {
             this.rock.squashKick?.(1.2);
             this.tapeSkips.push(this.tape.length - 1);
             this._emit("boing", { at: this.pos.clone(), n: this.skips });
-          } else if (hit?.type === "deck" && this.vel.y < 0) {
+          } else if (hit?.type === "deck") {
             // landed on the deck — ride the ferry!
             this.state = "onboat";
             this.boat = hit.boat;
-            this.boatLocal.copy(hit.boat.worldToLocal(this.pos.clone()));
-            this.boatLocal.y = hit.deckY;
+            this.boatLocal.copy(hit.local); // the spot on deck it came down on
+            this.pos.copy(hit.boat.localToWorld(this.boatLocal.clone()));
             this.vel.set(0, 0, 0);
             this.rock.squashKick?.(0.9);
-            this._emit("deckLand", { at: this.pos.clone() });
+            this._emit("deckLand", { at: this.pos.clone(), boatType: hit.boatType });
             break;
           }
         }
@@ -231,22 +253,25 @@ export class Skimmer {
           if (landed) break;
         }
 
-        // beached on the shore?
-        const r = Math.hypot(this.pos.x, this.pos.z);
-        if (r > LAKE_R - 1.2 && this.pos.y < WATER_Y + 1.2) {
-          _tmp.set(this.pos.x, 0, this.pos.z).setLength(LAKE_R - 1.5);
-          this.pos.x = _tmp.x; this.pos.z = _tmp.z;
-          this.pos.y = WATER_Y + 0.15;
-          this.vel.set(0, 0, 0);
-          this.state = "beached";
-          this._emit("beach", { at: this.pos.clone() });
-          break;
-        }
-
-        // water contact
-        const waterY = WATER_Y + water.heightAt(this.pos.x, this.pos.z, elapsed);
-        if (this.pos.y <= waterY + rockH && this.vel.y < 0) {
-          this._waterContact(ctx, waterY);
+        // contact test — you can only skip on the water channel. Over the
+        // sand/grass banks the stone just thuds down and beaches (no skipping).
+        if (isWaterAt(this.pos.x, this.pos.z)) {
+          const waterY = WATER_Y + water.heightAt(this.pos.x, this.pos.z, elapsed);
+          if (this.pos.y <= waterY + rockH && this.vel.y < 0) {
+            this._waterContact(ctx, waterY);
+          }
+        } else {
+          // Dropping onto the bank beaches you; so does driving into a slope on
+          // the way up, or a climbing stone would tunnel clean through a hill.
+          const groundY = terrainHeightAt(this.pos.x, this.pos.z);
+          if (this.pos.y <= groundY + (this.vel.y < 0 ? rockH : 0)) {
+            this.pos.y = Math.max(groundY + 0.12, WATER_Y + 0.05);
+            this.vel.set(0, 0, 0);
+            this.state = "beached";
+            this.rock.squashKick?.(0.5);
+            this._emit("beach", { at: this.pos.clone() });
+            break;
+          }
         }
         break;
       }
@@ -260,7 +285,7 @@ export class Skimmer {
 
       case "sinking": {
         this.sinkT += dt;
-        const bed = -lakeDepthAt(this.pos.x, this.pos.z) + 0.4;
+        const bed = sunkRestY(this.pos.x, this.pos.z);
         this.pos.y = Math.max(bed, this.pos.y - dt * (1.2 + this.rock.heft * 1.6));
         this.vel.multiplyScalar(1 - 2.5 * dt);
         this.pos.x += this.vel.x * dt;
@@ -275,7 +300,7 @@ export class Skimmer {
         // line hooks it, RivalLines owns pos.y for the reel-up.
         if (!this.hookedByLine) {
           const depth = lakeDepthAt(this.pos.x, this.pos.z);
-          const bed = -depth + 0.4;
+          const bed = sunkRestY(this.pos.x, this.pos.z);
           if (this.pos.y > bed) this.pos.y = Math.max(bed, this.pos.y - dt * Math.max(2, depth / 2.4));
         }
         break;
@@ -285,6 +310,21 @@ export class Skimmer {
         // bob on the waves (restY lifts this onto the buoy / tee bridge)
         const wy = WATER_Y + water.heightAt(this.pos.x, this.pos.z, elapsed);
         this.pos.y = wy + this.restY + Math.sin(elapsed * 2 + this.bobPhase) * 0.02;
+        break;
+      }
+
+      case "whirl": {
+        // Holed out: ride the vortex in. Sweeps inward down the wall, winding
+        // faster as the radius closes, and once it reaches the throat gets drawn
+        // under until the churn closes over it.
+        const w = this._whirl;
+        w.r = Math.max(WHIRL_ORBIT_R, w.r - dt * (0.8 + w.r * 1.6));
+        w.a += dt * (2.2 + 4.6 / Math.max(0.7, w.r));
+        this.pos.x = w.cx + Math.cos(w.a) * w.r;
+        this.pos.z = w.cz + Math.sin(w.a) * w.r;
+        if (w.r <= WHIRL_ORBIT_R + 0.01) w.sink = Math.min(WHIRL_SINK, w.sink + dt * 0.8);
+        this.pos.y = WATER_Y + vortexSurfaceY(w.r + WHIRL_STONE_R) + 0.1 - w.sink
+                   + Math.sin(elapsed * 2.6 + this.bobPhase) * 0.05;
         break;
       }
 
@@ -305,6 +345,10 @@ export class Skimmer {
       m.rotation.y += dt * 0.15;
     } else if (this.state === "sinking") {
       m.rotation.x += dt * 2.2;
+    } else if (this.state === "whirl") {
+      // spun by the water it's caught in, and tipped into the slope of the bowl
+      m.rotation.y += dt * 2.6;
+      m.rotation.z = THREE.MathUtils.lerp(m.rotation.z, 0.22, 3 * dt);
     } else if (this.state === "fishing") {
       m.rotation.x += dt * 0.5;
       m.rotation.y += dt * 0.3;
@@ -378,6 +422,7 @@ export class Skimmer {
 
   _knockRival(victim, ctx) {
     if (victim.state === "sinking" || victim.state === "fishing") return;
+    if (victim.onStartBridge) return; // safe on the tee until they've thrown
     if (victim.isRemote) {
       // their client owns the physics — we just fire the juice + let main
       // relay a knock message to the victim
@@ -392,6 +437,7 @@ export class Skimmer {
   /** get punted by a splash blast (local or via network) */
   applyKnock(fromPos) {
     if (this.state === "sinking" || this.state === "fishing") return;
+    if (this.onStartBridge) return; // immune while parked on the starting bridge
     _tmp.subVectors(this.pos, fromPos);
     _tmp.y = 0;
     if (_tmp.lengthSq() < 0.01) _tmp.set(1, 0, 0);
@@ -407,16 +453,31 @@ export class Skimmer {
     this._forceSink = true;
   }
 
+  /**
+   * The hole is a whirlpool, and the only way into it is through the water.
+   * Called from _waterContact and nowhere else, so a stone has to actually touch
+   * down inside the rim to be taken — skip across, settle in, or splash down. A
+   * stone that sails over the vortex, however low, is never in contact with it
+   * and flies clean past, same as it would over any other stretch of lake.
+   */
   _checkFlag(ctx, atRest) {
     if (this.finished || !ctx.flagPos) return;
-    const d = Math.hypot(this.pos.x - ctx.flagPos.x, this.pos.z - ctx.flagPos.z);
-    if (d < ctx.captureR) {
-      this.finished = true;
-      // park the stone by the flag
-      this.state = "resting";
-      this.vel.set(0, 0, 0);
-      this._emit("flag", { at: this.pos.clone() });
-    }
+    const dx = this.pos.x - ctx.flagPos.x, dz = this.pos.z - ctx.flagPos.z;
+    const d = Math.hypot(dx, dz);
+    if (d >= ctx.captureR) return;
+
+    this.finished = true;
+    this.vel.set(0, 0, 0);
+    // caught in the swirl: carry the entry point and heading into the spiral so
+    // the stone keeps the line it arrived on instead of snapping to the rim
+    this.state = "whirl";
+    this._whirl = {
+      cx: ctx.flagPos.x, cz: ctx.flagPos.z,
+      a: Math.atan2(dz, dx),
+      r: Math.max(0.3, d),
+      sink: 0,
+    };
+    this._emit("flag", { at: this.pos.clone() });
   }
 
   distToFlag(flagPos) {
@@ -451,7 +512,7 @@ export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed
   const elev = mode === "skip" ? SKIP_ELEV + 0.10 * (1 - power) : LOB_ELEV;
   const speed = MAX_SPEED * (0.28 + 0.72 * power) * (mode === "skip" ? 1 : 0.68);
   s.vel.set(dirXZ.x * Math.cos(elev) * speed, Math.sin(elev) * speed, dirXZ.z * Math.cos(elev) * speed);
-  s.pos.y = WATER_Y + 0.5;
+  s.pos.y = Math.max(s.pos.y, WATER_Y + 0.5); // match throwRock: hilltops launch from up there
 
   const flat = rock.flat, heft = rock.heft;
   const points = [];
@@ -487,8 +548,11 @@ export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed
       }
       if (hitIsl) { end = "island"; points.push(s.pos.clone()); break; }
     }
-    const r = Math.hypot(s.pos.x, s.pos.z);
-    if (r > LAKE_R - 1.2) { end = "beach"; break; }
+    if (!isWaterAt(s.pos.x, s.pos.z)) {
+      const gy = terrainHeightAt(s.pos.x, s.pos.z);
+      if (s.pos.y <= gy + (s.vel.y < 0 ? 0.18 : 0)) { end = "beach"; points.push(s.pos.clone()); break; }
+      continue; // still airborne over land — keep flying, no skip
+    }
     const wy = WATER_Y + water.heightAt(s.pos.x, s.pos.z, elapsed);
     if (s.pos.y <= wy + 0.18 && s.vel.y < 0) {
       const hSpeed = Math.hypot(s.vel.x, s.vel.z);

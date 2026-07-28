@@ -1,0 +1,81 @@
+<!doctype html>
+<!--
+  Eye alignment check — every expression at once, drawn by the real in-game
+  FlatEyes shader. The gaze sweeps a slow circle, so you can watch each pupil
+  travel and confirm it stays inside its own eye white.
+
+  Open http://localhost:8741/eyecheck.html while `npm run dev` is running, or
+  shoot it headless with `node scripts/shot-eyecheck.mjs out.png`. Tune the
+  sockets in the Eyes Lab (/admin) or with scripts/measure-eyes.mjs.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>eye alignment check</title>
+<style>
+  body { margin: 0; background: #7d8f97; font: 600 12px/1 system-ui, sans-serif; color: #16324a; }
+  #wrap { position: relative; width: 1200px; height: 900px; }
+  canvas { position: absolute; inset: 0; }
+  #labels { position: absolute; inset: 0; pointer-events: none; }
+  .lbl {
+    position: absolute; transform: translateX(-50%); text-align: center;
+    text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.75;
+  }
+  #hint { position: absolute; left: 10px; bottom: 8px; opacity: 0.6; font-weight: 500; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="labels"></div>
+  <div id="hint">pupils sweep a circle — each one should stay inside its own eye white</div>
+</div>
+<script type="module">
+import * as THREE from "three";
+import { FlatEyes, EYE_EXPRESSIONS } from "/src/flateyes.js";
+
+const W = 1200, H = 900, COLS = 4, ROWS = 3;
+const renderer = new THREE.WebGLRenderer({ antialias: true, canvas: document.getElementById("c") });
+renderer.setSize(W, H);
+renderer.setClearColor(0x9fb0b8); // stone grey, like the rock the face sits on
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-2, 2, 1.5, -1.5, 0.1, 10);
+camera.position.z = 5;
+
+const labels = document.getElementById("labels");
+const eyes = [];
+EYE_EXPRESSIONS.forEach((name, i) => {
+  const col = i % COLS, row = Math.floor(i / COLS);
+  const fe = new FlatEyes(name);
+  const g = new THREE.Group();
+  g.add(fe.object);
+  g.position.set(col - 1.5, 1 - row, 0);
+  g.scale.setScalar(0.9);
+  scene.add(g);
+  eyes.push(fe);
+
+  const el = document.createElement("div");
+  el.className = "lbl";
+  el.textContent = name;
+  el.style.left = `${((col + 0.5) / COLS) * 100}%`;
+  el.style.top = `${((row + 0.84) / ROWS) * 100}%`;
+  labels.appendChild(el);
+});
+
+const camQuat = new THREE.Quaternion();
+camera.getWorldQuaternion(camQuat);
+const target = new THREE.Vector3();
+let t = 0;
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = 1 / 60;
+  t += dt;
+  // a slow circular sweep, far enough out to push the pupils to their limits
+  target.set(Math.cos(t * 0.9) * 40, Math.sin(t * 0.9) * 40, 45);
+  for (const fe of eyes) fe.update(dt, target, camQuat);
+  renderer.render(scene, camera);
+}
+frame();
+</script>
+</body>
+</html>

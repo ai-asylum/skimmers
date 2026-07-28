@@ -1,12 +1,19 @@
 /**
  * The lake world: gradient sky dome with a fat toon sun, low-poly shore ring
- * with sand -> grass -> hills, instanced pine trees, drifting clouds, the flag
- * buoy (waving cloth flag, pulsing capture ring), tee dock, and wander-y ducks.
+ * with sand -> grass -> hills, instanced voxel trees, drifting clouds, the
+ * whirlpool hole (spiralling bowl, funnel throat, bare flagpole), tee dock, and
+ * wander-y ducks.
  * Lighting per the mood-lighting-rig scrap: warm key, cool fill, low ambient.
  */
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { HOOK_SPEED } from "./fishing.js";
-import { LAKE_R, WATER_Y, lakeDepthAt } from "./water.js";
+import {
+  LAKE_R, WATER_Y, lakeDepthAt, sunkRestY, SWELL_GLSL, WAVE_AMP,
+  VORTEX_R, VORTEX_THROAT_R, VORTEX_DEPTH, vortexSurfaceY,
+} from "./water.js";
+import { Terrain, terrainHeightAt } from "./terrain.js";
+import { Grass } from "./grass.js";
 import { celMat } from "./celshader.js";
 
 const INK = 0x16324a;
@@ -50,74 +57,20 @@ function makeSky(scene) {
   return sky;
 }
 
-// ------------------------------------------------------------------ terrain ring
-function makeShore(scene) {
-  const R = 240;
-  // RingGeometry (not CircleGeometry): we need radial subdivisions so the
-  // beach rise actually exists in the mesh, not just at center + rim.
-  const geo = new THREE.RingGeometry(0.5, R, 128, 100);
-  geo.rotateX(-Math.PI / 2);
-  const pos = geo.attributes.position;
-  const colors = new Float32Array(pos.count * 3);
-  const sand = new THREE.Color("#eed9a4");
-  const grass = new THREE.Color("#7cc45e");
-  const dark = new THREE.Color("#4e9a4a");
-  const rockc = new THREE.Color("#9aa5a3");
-  const tmp = new THREE.Color();
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), z = pos.getZ(i);
-    const r = Math.hypot(x, z);
-    const a = Math.atan2(z, x);
-    const wob = Math.sin(a * 5 + 1.7) * 2.2 + Math.sin(a * 11 + 0.4) * 1.1;
-    const edge = LAKE_R + wob;
-    let y;
-    if (r < edge) {
-      y = -0.45; // just under water
-      tmp.copy(sand);
-    } else {
-      const d = r - edge;
-      y = Math.min(26, Math.pow(d * 0.16, 1.55)) - 0.4;
-      // rolling bumps
-      y += Math.sin(a * 7 + d * 0.14) * Math.min(2.5, d * 0.05);
-      if (d < 6) tmp.copy(sand);
-      else if (d < 14) tmp.copy(sand).lerp(grass, (d - 6) / 8);
-      else if (y > 14) tmp.copy(dark).lerp(rockc, Math.min(1, (y - 14) / 9));
-      else tmp.copy(grass).lerp(dark, Math.min(1, d / 70));
-      // subtle color noise
-      const n = (Math.sin(x * 0.53) + Math.cos(z * 0.61)) * 0.035;
-      tmp.offsetHSL(0, 0, n);
-    }
-    pos.setY(i, y);
-    colors[i * 3] = tmp.r; colors[i * 3 + 1] = tmp.g; colors[i * 3 + 2] = tmp.b;
-  }
-  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  geo.computeVertexNormals();
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.receiveShadow = true;
-  scene.add(mesh);
-  return mesh;
-}
-
 // ------------------------------------------------------------------ trees
+/** ground height — now delegated to the displaced Terrain (src/terrain.js) */
 export function shoreHeight(x, z) {
-  // must mirror makeShore's height formula (without the per-vertex noise wobble)
-  const r = Math.hypot(x, z);
-  const a = Math.atan2(z, x);
-  const wob = Math.sin(a * 5 + 1.7) * 2.2 + Math.sin(a * 11 + 0.4) * 1.1;
-  const edge = LAKE_R + wob;
-  if (r < edge) return -0.45;
-  const d = r - edge;
-  let y = Math.min(26, Math.pow(d * 0.16, 1.55)) - 0.4;
-  y += Math.sin(a * 7 + d * 0.14) * Math.min(2.5, d * 0.05);
-  return y;
+  return terrainHeightAt(x, z);
 }
 
 // shared clock for the wind-sway shader patch (team scrap: vertex-sway-shader-patch)
 const swayTime = { value: 0 };
 
-function patchSway(mat, amp) {
-  mat.userData.noCel = true; // cel swap would discard onBeforeCompile
+/**
+ * `y0`..`y1` is the local height band over which the sway winds up, so a tree
+ * can hold its trunk still and only stir from the canopy up.
+ */
+function patchSway(mat, amp, y0 = -1.2, y1 = 1.6) {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uSwayTime = swayTime;
     shader.vertexShader = shader.vertexShader
@@ -132,24 +85,73 @@ function patchSway(mat, amp) {
           #else
             vec4 swayW = modelMatrix * vec4(position, 1.0);
           #endif
-          float swayK = smoothstep(-1.2, 1.6, position.y);
+          float swayK = smoothstep(${y0.toFixed(2)}, ${y1.toFixed(2)}, position.y);
           transformed.x += sin(uSwayTime * 1.7 + swayW.x * 0.35 + swayW.z * 0.31) * ${amp.toFixed(3)} * swayK;
           transformed.z += cos(uSwayTime * 1.3 + swayW.z * 0.29) * ${(amp * 0.7).toFixed(3)} * swayK;
         }`
       );
   };
-  mat.customProgramCacheKey = () => "sway" + amp;
+  mat.customProgramCacheKey = () => `sway${amp}_${y0}_${y1}`;
+}
+
+// Voxel box trees ported from spellwright's prop models (tree.js, pine-tree.js).
+// Sizes, offsets and the size-graded canopy greens are verbatim; origin sits at
+// the trunk base so an instance drops straight onto the ground height. Spellwright
+// gives every part its own scene node to rustle; here the whole tree merges into
+// one geometry with the palette baked into vertex colours, so the forest is two
+// instanced draws and the canopy motion comes from the vertex sway above.
+const TREE_PARTS = {
+  // Broadleaf: trunk buried mid-canopy, core block with four overlapping side
+  // bulges and a cap, each cube a hair lighter as it gets smaller.
+  broadleaf: [
+    { size: [0.8, 4.8, 0.8], at: [0, 2.4, 0], color: 0x4a2f1c },
+    { size: [0.36, 0.36, 0.36], at: [0.44, 2.8, 0], color: 0x33200f },
+    { size: [2.8, 2.0, 2.8], at: [0, 4.6, 0], color: 0x3e6b2c },
+    { size: [1.6, 1.0, 1.6], at: [-0.2, 5.8, 0.1], color: 0x487536 },
+    { size: [1.0, 1.4, 1.2], at: [-1.4, 4.8, 0.4], color: 0x497637 },
+    { size: [1.0, 1.2, 1.2], at: [1.4, 4.9, -0.2], color: 0x4a7738 },
+    { size: [1.2, 1.0, 0.8], at: [0.2, 5.1, -1.4], color: 0x4b7839 },
+    { size: [1.0, 0.8, 0.8], at: [-0.1, 4.2, 1.4], color: 0x4c793a },
+  ],
+  // Pine: slim trunk under four tapered tiers, each sunk 30% into the one below
+  // so the silhouette reads as a cone rather than a stack.
+  pine: [
+    { size: [0.5, 4.0, 0.5], at: [0, 2.0, 0], color: 0x3a2410 },
+    { size: [2.4, 1.4, 2.4], at: [0, 2.4, 0], color: 0x274d2a },
+    { size: [2.0, 1.3, 2.0], at: [0, 3.45, 0], color: 0x2b542f },
+    { size: [1.6, 1.2, 1.6], at: [0, 4.45, 0], color: 0x2f5b33 },
+    { size: [1.0, 1.0, 1.0], at: [0, 5.35, 0], color: 0x336337 },
+  ],
+};
+
+function makeTreeGeometry(parts) {
+  const boxes = parts.map(({ size, at, color }) => {
+    const g = new THREE.BoxGeometry(size[0], size[1], size[2]);
+    g.translate(at[0], at[1], at[2]);
+    g.deleteAttribute("uv"); // untextured, and merging needs the sets to match
+    const c = new THREE.Color(color);
+    const n = g.attributes.position.count;
+    const rgb = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { rgb[i * 3] = c.r; rgb[i * 3 + 1] = c.g; rgb[i * 3 + 2] = c.b; }
+    g.setAttribute("color", new THREE.BufferAttribute(rgb, 3));
+    return g;
+  });
+  return mergeGeometries(boxes);
 }
 
 function makeTrees(scene) {
-  const trunkGeo = new THREE.CylinderGeometry(0.22, 0.34, 1.4, 6);
-  const leafGeo = new THREE.ConeGeometry(1.5, 3.2, 7);
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8a5a33, flatShading: true });
-  const leafMat = new THREE.MeshStandardMaterial({ color: 0x3f9950, flatShading: true });
-  patchSway(leafMat, 0.14);
   const N = 90;
-  const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, N);
-  const leaves = new THREE.InstancedMesh(leafGeo, leafMat, N);
+  const species = ["pine", "broadleaf"].map((key) => {
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true });
+    // Dead below 1.2u so the trunk stays rooted, full by 5.5u — the trunk holds
+    // still and the canopy stirs, which is how spellwright's gated trunk sway
+    // plus per-leaf rustle reads from a distance.
+    patchSway(mat, 0.14, 1.2, 5.5);
+    const mesh = new THREE.InstancedMesh(makeTreeGeometry(TREE_PARTS[key]), mat, N);
+    mesh.count = 0;
+    scene.add(mesh);
+    return mesh;
+  });
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const e = new THREE.Euler();
@@ -159,19 +161,18 @@ function makeTrees(scene) {
     const r = LAKE_R + 8 + Math.random() * 90;
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
     const y = shoreHeight(x, z);
-    if (y < 0.4 || y > 20) continue;
-    const s = 0.8 + Math.random() * 1.6;
+    if (y < 0.4 || y > 34) continue; // the banks stand a lot taller now
+    // The voxel trees are ~6u tall where the old cones were ~4.6u, so the scale
+    // range is pulled in to keep the same 4–10u spread of silhouettes.
+    const s = 0.65 + Math.random() * 0.85;
     e.set(0, Math.random() * Math.PI, (Math.random() - 0.5) * 0.08);
     q.setFromEuler(e);
-    m.compose(new THREE.Vector3(x, y + 0.6 * s, z), q, new THREE.Vector3(s, s, s));
-    trunks.setMatrixAt(placed, m);
-    m.compose(new THREE.Vector3(x, y + (1.2 + 1.6) * s, z), q, new THREE.Vector3(s, s, s));
-    leaves.setMatrixAt(placed, m);
+    m.compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(s, s, s));
+    const mesh = species[Math.random() < 0.55 ? 0 : 1]; // pine-leaning mix
+    mesh.setMatrixAt(mesh.count++, m);
     placed++;
   }
-  trunks.count = placed;
-  leaves.count = placed;
-  scene.add(trunks, leaves);
+  for (const mesh of species) mesh.instanceMatrix.needsUpdate = true;
 }
 
 // ------------------------------------------------------------------ clouds
@@ -198,61 +199,67 @@ function makeClouds(scene) {
   return group;
 }
 
-// ------------------------------------------------------------------ flag buoy
-export class FlagBuoy {
+// ------------------------------------------------------------- whirlpool hole
+// The hole is a vortex in the fairway with the flagpole planted bare in the
+// middle of it — no buoy, nothing to land on. Its rim is the capture radius, so
+// the swirl is literally the target: put a stone into that water and you're in,
+// sail over the top and the whirlpool never touches you.
+//
+// Two pieces: the vortex surface itself — real geometry, lathed from the shared
+// profile in water.js, dishing down and plunging into a funnel throat, sitting in
+// a hole the lake shader cuts for it — and the pole leaning as the swirl tugs.
+
+// gl_FragColor is written raw here, like the lake and the sky dome, so bypass
+// THREE's sRGB->linear step and let these bytes land on screen as picked.
+const paint = (hex) => new THREE.Color().setHex(hex, THREE.LinearSRGBColorSpace);
+
+// The churn. Hard-edged logarithmic spiral arms, not a smooth gradient sweep:
+// next to this lake's flat quantised bands a soft swirl reads as fog on the
+// water rather than as painted foam.
+const CHURN_GLSL = /* glsl */ `
+  float vhash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float vnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(vhash(i), vhash(i + vec2(1, 0)), u.x),
+               mix(vhash(i + vec2(0, 1)), vhash(i + vec2(1, 1)), u.x), u.y);
+  }
+  float hardEdge(float e, float w, float x) { return smoothstep(e - w, e + w, x); }
+
+  // One band of a spiral, evenly spaced in radius: "arms" of them, each sweeping
+  // "turns" revolutions from the rim in to the throat. Deliberately not a log
+  // spiral — those wind infinitely tight as r falls and the middle of the vortex
+  // collapses into a moire of concentric rings instead of reading as a swirl.
+  float spiralArm(float a, float nr, float t, float arms, float turns, float spin, float w) {
+    float ph = a * arms + (1.0 - nr) * turns * 6.2831853 - t * spin;
+    float f = fract(ph / 6.2831853);
+    return hardEdge(0.03, 0.04, f) - hardEdge(w, 0.04, f);
+  }
+`;
+
+const VORTEX_PALETTE = {
+  uMid: { value: paint(0x2186ac) }, // matches the lake's mid band at the rim
+  uDeep: { value: paint(0x175e8a) },
+  uThroat: { value: paint(0x0e3a5c) },
+  uAbyss: { value: paint(0x061f36) },
+  uFoam: { value: paint(0xffffff) },
+};
+const vortexUniforms = (extra) => {
+  const u = { uTime: { value: 0 } };
+  for (const k in VORTEX_PALETTE) u[k] = { value: VORTEX_PALETTE[k].value };
+  return Object.assign(u, extra);
+};
+
+export class WhirlpoolHole {
   constructor(scene) {
     this.group = new THREE.Group();
+    this.uniforms = [];
 
-    // floating platform
-    const base = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.9, 2.2, 0.55, 10),
-      new THREE.MeshStandardMaterial({ color: 0xc8763a, flatShading: true })
-    );
-    base.position.y = 0.12;
-    this.group.add(base);
-    const rim = new THREE.Mesh(
-      new THREE.TorusGeometry(1.95, 0.22, 8, 14),
-      new THREE.MeshStandardMaterial({ color: 0xe0e6e8, flatShading: true })
-    );
-    rim.rotation.x = Math.PI / 2;
-    rim.position.y = 0.34;
-    this.group.add(rim);
+    this._buildBowl();
+    this._buildPole();
 
-    // pole
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.09, 0.12, 5.2, 6),
-      new THREE.MeshStandardMaterial({ color: 0xf4efe2 })
-    );
-    pole.position.y = 2.8;
-    this.group.add(pole);
-    const knob = new THREE.Mesh(
-      new THREE.SphereGeometry(0.22, 8, 6),
-      new THREE.MeshStandardMaterial({ color: 0xffd24a })
-    );
-    knob.position.y = 5.45;
-    this.group.add(knob);
-
-    // waving cloth flag (CPU vertex wave)
-    this.flagGeo = new THREE.PlaneGeometry(2.6, 1.5, 10, 5);
-    this.flagBase = this.flagGeo.attributes.position.array.slice();
-    const flagMat = new THREE.MeshStandardMaterial({
-      color: 0xff5470, side: THREE.DoubleSide, flatShading: true,
-    });
-    this.flag = new THREE.Mesh(this.flagGeo, flagMat);
-    this.flag.position.set(1.34, 4.55, 0);
-    this.group.add(this.flag);
-
-    // pulsing capture ring on the water
-    const ringGeo = new THREE.RingGeometry(0.9, 1.0, 48);
-    ringGeo.rotateX(-Math.PI / 2);
-    this.ring = new THREE.Mesh(
-      ringGeo,
-      new THREE.MeshBasicMaterial({ color: 0xffd24a, transparent: true, opacity: 0.8, depthWrite: false })
-    );
-    this.ring.position.y = 0.05;
-    this.group.add(this.ring);
-
-    // beacon glow column (helps you find it across the lake)
+    // beacon glow column — the vortex sits flat on the water and vanishes at
+    // any distance, so the pole and this column are all you can see from the tee
     this.beacon = new THREE.Mesh(
       new THREE.CylinderGeometry(0.5, 0.9, 26, 10, 1, true),
       new THREE.MeshBasicMaterial({
@@ -260,25 +267,181 @@ export class FlagBuoy {
         side: THREE.DoubleSide, depthWrite: false,
       })
     );
+    // no hole until a fairway puts one somewhere (the title lake is unbroken)
+    this.group.visible = false;
     this.beacon.position.y = 13;
+    this.beacon.renderOrder = 5;
     this.group.add(this.beacon);
 
-    this.captureR = 4.2;
     scene.add(this.group);
   }
 
-  setPosition(x, z) {
-    this.group.position.set(x, WATER_Y, z);
-  }
-
+  get radius() { return VORTEX_R; }
   get position() { return this.group.position; }
 
+  /** The vortex itself: a lathed surface of revolution running from the rim, down
+   *  through the dished bowl, over the lip and away into the funnel throat. One
+   *  continuous profile so the dish and the funnel cannot part company, and the
+   *  rim rides the lake's own swell so it meets the water it was cut out of. */
+  _buildBowl() {
+    // walk the shared profile from the rim inward, packing points where it bends
+    const prof = [];
+    const DISH_SEG = 16, FUNNEL_SEG = 20;
+    for (let i = 0; i <= DISH_SEG; i++) {
+      const r = VORTEX_R + (VORTEX_THROAT_R - VORTEX_R) * (i / DISH_SEG);
+      prof.push(new THREE.Vector2(r, vortexSurfaceY(r)));
+    }
+    for (let i = 1; i <= FUNNEL_SEG; i++) {
+      const t = i / FUNNEL_SEG;
+      // bunch these toward the throat, where the taper is tightest
+      const r = VORTEX_THROAT_R * (1 - Math.pow(t, 0.7));
+      prof.push(new THREE.Vector2(Math.max(0, r), vortexSurfaceY(r)));
+    }
+    const geo = new THREE.LatheGeometry(prof, 96);
+
+    const uniforms = vortexUniforms({
+      uR: { value: VORTEX_R },
+      uDepth: { value: VORTEX_DEPTH },
+    });
+    const mat = new THREE.ShaderMaterial({
+      uniforms,
+      vertexShader: /* glsl */ `
+        uniform float uTime;
+        uniform float uR;
+        varying vec3 vLocal;
+        ${SWELL_GLSL}
+        void main() {
+          vLocal = position;
+          float nr = clamp(length(position.xz) / uR, 0.0, 1.0);
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          // The whole outer half rides the lake's swell exactly, so the rim can
+          // never drift off the water it laps over; only the throat, which is
+          // below the waves entirely, damps out of it.
+          wp.y += swell(wp.xz, uTime).x * ${WAVE_AMP} * smoothstep(0.15, 0.55, nr);
+          // and the rim sits a few centimetres proud of the lake, so the depth
+          // test resolves that overlap the same way every frame instead of
+          // flickering between the two along the seam
+          wp.y += 0.035 * smoothstep(0.88, 1.0, nr);
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float uTime;
+        uniform float uR;
+        uniform float uDepth;
+        uniform vec3 uMid; uniform vec3 uDeep; uniform vec3 uThroat;
+        uniform vec3 uAbyss; uniform vec3 uFoam;
+        varying vec3 vLocal;
+        ${CHURN_GLSL}
+        void main() {
+          vec2 P = vLocal.xz;
+          float r = length(P);
+          float nr = clamp(r / uR, 0.0, 1.0);
+          float a = atan(P.y, P.x);
+          float t = uTime;
+          // how far under the waterline this bit of the surface has been dragged
+          float sink = clamp(-vLocal.y / uDepth, 0.0, 1.0);
+
+          // Flat tonal bands, stepped on depth rather than on radius: the deeper
+          // the water has been pulled, the darker it goes. Wobbled, and dragged
+          // round by the swirl, so the steps read as water being sucked under
+          // rather than as printed rings.
+          float band = sink
+                     + (vnoise(P * 0.6 + vec2(t * 0.05, -t * 0.04)) - 0.5) * 0.05
+                     + 0.03 * sin(a * 2.0 + sink * 7.0 - t * 0.9);
+          vec3 col = uMid;
+          col = mix(col, uDeep,   hardEdge(0.055, 0.012, band));
+          col = mix(col, uThroat, hardEdge(0.30, 0.02, band));
+          col = mix(col, uAbyss,  hardEdge(0.62, 0.03, band));
+
+          // spiral foam arms, two scales, wrapping in toward the throat. Kept
+          // narrow and well spaced — widen them and the whole middle of the
+          // vortex washes out into one milky disc.
+          float arm = spiralArm(a, nr, t, 3.0, 1.15, 1.5, 0.26);
+          arm = max(arm, 0.7 * spiralArm(a, nr, t, 2.0, 0.75, 1.0, 0.18));
+          // Torn apart before they reach the rim, and gone by the lip: these are
+          // laid out in plan, so on the steep wall of the throat they would
+          // compress into printed-looking rings instead of reading as swirl.
+          arm *= (1.0 - smoothstep(0.72, 0.97, nr))
+               * (1.0 - smoothstep(0.10, 0.34, sink));
+          col = mix(col, uFoam, clamp(arm, 0.0, 1.0) * 0.85);
+
+          // flecks of foam dragged round the dish, inner rings faster than outer
+          float sp = t * (0.55 + 1.9 / max(0.7, r));
+          float cs = cos(sp), sn = sin(sp);
+          vec2 Pr = vec2(cs * P.x - sn * P.y, sn * P.x + cs * P.y);
+          float fleck = hardEdge(0.74, 0.02, vnoise(Pr * 2.3));
+          col = mix(col, uFoam, fleck * 0.22 * (1.0 - smoothstep(0.6, 0.95, nr))
+                                * (1.0 - smoothstep(0.1, 0.4, sink)));
+
+          // Scalloped foam collar riding the rim. Doing real work: it is the
+          // capture edge, and it straddles the seam where this mesh laps over
+          // the hole the lake shader cut for it.
+          float lip = 0.90 + 0.05 * vnoise(P * 0.8 + vec2(t * 0.07, -t * 0.05))
+                    + 0.028 * sin(a * 5.0 - t * 1.1);
+          float collar = hardEdge(lip, 0.018, nr);
+          col = mix(col, uFoam, collar * 0.8);
+
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `,
+      // Opaque, so it lands in the opaque pass ahead of the lake: the water is
+      // then free to close over whatever of this plunges behind it.
+      side: THREE.DoubleSide,
+    });
+
+    this.bowl = new THREE.Mesh(geo, mat);
+    this.group.add(this.bowl);
+    this.uniforms.push(uniforms);
+  }
+
+  /** bare flagpole standing in the middle of the vortex, leaning into the pull */
+  _buildPole() {
+    this.pole = new THREE.Group();
+
+    // runs down into the throat, so it reads as planted in the hole rather than
+    // resting on it; the funnel wall occludes it properly from here on
+    const POLE_TOP = 5.4, POLE_BOT = -2.4;
+    const shaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.1, 0.13, POLE_TOP - POLE_BOT, 6),
+      new THREE.MeshStandardMaterial({ color: 0xf4efe2 })
+    );
+    shaft.position.y = (POLE_TOP + POLE_BOT) / 2;
+    this.pole.add(shaft);
+
+    const knob = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0xffd24a })
+    );
+    knob.position.y = POLE_TOP + 0.05;
+    this.pole.add(knob);
+
+    // waving cloth flag (CPU vertex wave)
+    this.flagGeo = new THREE.PlaneGeometry(2.6, 1.5, 10, 5);
+    this.flagBase = this.flagGeo.attributes.position.array.slice();
+    this.cloth = new THREE.Mesh(
+      this.flagGeo,
+      new THREE.MeshStandardMaterial({ color: 0xff5470, side: THREE.DoubleSide, flatShading: true })
+    );
+    this.cloth.position.set(1.34, 4.55, 0);
+    this.pole.add(this.cloth);
+
+    this.group.add(this.pole);
+  }
+
+  setPosition(x, z) {
+    // the dish adds the swell itself, per-vertex, so the group sits dead level
+    this.group.position.set(x, WATER_Y, z);
+    this.group.visible = true;
+  }
+
   update(dt, elapsed, water) {
-    // bob on the waves
-    const p = this.group.position;
-    this.group.position.y = WATER_Y + water.heightAt(p.x, p.z, elapsed) * 1.4;
-    this.group.rotation.z = Math.sin(elapsed * 0.9) * 0.03;
-    this.group.rotation.x = Math.cos(elapsed * 0.7) * 0.03;
+    for (const u of this.uniforms) u.uTime.value = elapsed;
+
+    // the pole never quite gets pulled under, but it never stops trying: a slow
+    // precessing lean, as if the swirl were walking it around its own footing
+    this.pole.rotation.x = Math.sin(elapsed * 0.55) * 0.055;
+    this.pole.rotation.z = Math.cos(elapsed * 0.55) * 0.055;
 
     // flag cloth wave
     const pos = this.flagGeo.attributes.position;
@@ -292,10 +455,6 @@ export class FlagBuoy {
     pos.needsUpdate = true;
     this.flagGeo.computeVertexNormals();
 
-    // capture ring pulse
-    const k = 1 + Math.sin(elapsed * 2.4) * 0.12;
-    this.ring.scale.setScalar(this.captureR * k);
-    this.ring.material.opacity = 0.5 + Math.sin(elapsed * 2.4) * 0.25;
     this.beacon.material.opacity = 0.09 + Math.sin(elapsed * 1.7) * 0.035;
   }
 }
@@ -386,8 +545,7 @@ export class Pontoon {
     for (const pile of this.piles) {
       w.set(pile.userData.px, 0, pile.userData.pz);
       this.group.localToWorld(w);
-      const sh = shoreHeight(w.x, w.z);
-      const groundY = sh > -0.1 ? sh : -lakeDepthAt(w.x, w.z);
+      const groundY = shoreHeight(w.x, w.z);
       const len = Math.max(0.5, this.group.position.y - 0.2 - groundY + 0.6);
       pile.scale.y = len;
       pile.position.set(pile.userData.px, -0.2 - len / 2, pile.userData.pz);
@@ -739,7 +897,7 @@ export class RivalLines {
       let job = this.jobs.get(s);
       if (!job) {
         // the line waits until the stone has settled out of sight
-        const bedY = -lakeDepthAt(s.pos.x, s.pos.z) + 0.4;
+        const bedY = sunkRestY(s.pos.x, s.pos.z);
         const settled = s.isRemote ? s.mesh.position.y < -0.3 : s.mesh.position.y <= bedY + 0.01;
         if (!settled) { active.add(s); continue; }
         const rig = this.rigs.find((r) => !r.busy);
@@ -802,10 +960,11 @@ export class World {
   constructor(scene) {
     this.scene = scene;
     makeSky(scene);
-    makeShore(scene);
+    this.terrain = new Terrain(scene);
     makeTrees(scene);
+    this.grass = new Grass(scene);
     this.clouds = makeClouds(scene);
-    this.flag = new FlagBuoy(scene);
+    this.flag = new WhirlpoolHole(scene);
     this.pontoon = new Pontoon(scene);
     this.course = new CourseMarkers(scene);
     this.ducks = [new Duck(scene), new Duck(scene), new Duck(scene)];
@@ -824,8 +983,15 @@ export class World {
     scene.fog = new THREE.Fog(0xa7dcef, 150, 400);
   }
 
+  /** rebuild the ground + grass for a hole's channel (null path => radial disc) */
+  setHole(path, halfWidth) {
+    this.terrain.setPath(path, halfWidth);
+    this.grass.setHole();
+  }
+
   update(dt, elapsed, water) {
     swayTime.value = elapsed;
+    this.grass.update(elapsed);
     this.flag.update(dt, elapsed, water);
     this.course.update(dt, elapsed, water);
     for (const d of this.ducks) d.update(dt, elapsed, water);

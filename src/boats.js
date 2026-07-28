@@ -13,10 +13,23 @@
 import * as THREE from "three";
 import { LAKE_R, WATER_Y } from "./water.js";
 
+const HULL_TOP = 0.7; // top of the bare hull sides
+
+// `decks` are the standable surfaces along local x — a stone coming down onto
+// one is caught and ferried. `blocks` are solid with nothing to stand on (the
+// tug's smokestack): those just clang. Everything above both is open sky.
 const TYPES = {
   row: { len: 3.4, wid: 1.5, deckY: 0.62 },
   sail: { len: 4.4, wid: 1.6, deckY: 0.68 },
-  steam: { len: 5.4, wid: 2.3, deckY: 0.9 },
+  steam: {
+    len: 5.4, wid: 2.3, deckY: 0.9,
+    decks: [
+      { x0: -2.7, x1: -1.6, y: 0.9 },   // aft deck
+      { x0: -1.6, x1: 0.4, y: 1.84 },   // cabin roof
+      { x0: 1.35, x1: 2.7, y: 0.9 },    // foredeck, past the smokestack
+    ],
+    blocks: [{ x0: 0.4, x1: 1.35, top: 2.28 }], // smokestack + its brass rim
+  },
 };
 
 const wood = new THREE.MeshStandardMaterial({ color: 0xa9682f, flatShading: true });
@@ -132,6 +145,17 @@ class Boat {
     this.dims = TYPES[type];
     this.group = buildBoatMesh(type);
     scene.add(this.group);
+    // tallest first, so a stone dropping onto the tug lands on the cabin roof
+    // rather than punching through to the deck below it
+    this.decks = (this.dims.decks ||
+      [{ x0: -this.dims.len / 2, x1: this.dims.len / 2, y: this.dims.deckY }])
+      .slice().sort((a, b) => b.y - a.y);
+    // how high the boat is solid at each stretch of x: a deck plus the crew,
+    // mast or cabin standing on it, or a block's own top
+    this.columns = [
+      ...this.decks.map((d) => ({ x0: d.x0, x1: d.x1, top: d.y + 1.0 })),
+      ...(this.dims.blocks || []),
+    ];
     this.curve = new THREE.CatmullRomCurve3(pathPoints, true, "centripetal", 0.6);
     this.speed = speed;
     this.len = this.curve.getLength();
@@ -181,17 +205,106 @@ class Boat {
     }
   }
 
-  /** world-space AABB-ish test in the boat's local frame */
-  collideLocal(pos, vel, radius) {
-    const local = this.group.worldToLocal(pos.clone());
-    const { len, wid, deckY } = this.dims;
-    const hx = len / 2 + radius, hz = wid / 2 + radius;
-    if (Math.abs(local.x) > hx || Math.abs(local.z) > hz || local.y < -0.2 || local.y > deckY + 1.0) return null;
-    // above the open deck, coming down -> land inside (the tug's deck is its roof-free stern)
-    if (local.y > deckY - 0.15 && vel.y < 0 &&
-        Math.abs(local.x) < len / 2 - 0.3 && Math.abs(local.z) < wid / 2 - 0.2) {
-      return { type: "deck", boat: this.group, deckY: deckY + 0.15 };
+  /**
+   * A deck's catch window along local x. `grip` is slack for a stone hanging
+   * over the rail, so it only applies at the bow/stern ends — internal edges
+   * (where one deck level meets the next) stay exact.
+   */
+  _deckX(d, grip) {
+    const half = this.dims.len / 2;
+    return [d.x0 <= -half + 0.01 ? d.x0 - grip : d.x0, d.x1 >= half - 0.01 ? d.x1 + grip : d.x1];
+  }
+
+  /** how high the boat is solid at local x — above this the stone flies free */
+  _ceilingAt(x) {
+    let top = HULL_TOP;
+    for (const c of this.columns) {
+      if (x >= c.x0 && x <= c.x1) top = Math.max(top, c.top);
     }
+    return top;
+  }
+
+  /** the highest deck the stone is over at local x/z, if any */
+  _deckUnder(x, z, grip) {
+    if (Math.abs(z) > this.dims.wid / 2 + grip) return null;
+    for (const d of this.decks) {
+      const [lo, hi] = this._deckX(d, grip);
+      if (x >= lo && x <= hi) return d;
+    }
+    return null;
+  }
+
+  /**
+   * Sweep prev -> now against the decks. A stone covers more than a deck's
+   * thickness in a single frame, so a point sample at the new position misses
+   * the deck and the stone drops clean through the boat. Instead: clip the
+   * frame's segment to the deck's footprint and see whether the stone was above
+   * the deck entering it and below on the way out — that's a landing, however
+   * fast or steep the arc was.
+   */
+  _deckLanding(prev, local, radius) {
+    const { wid } = this.dims;
+    // matches the hull box below, so there's no seam where a stone dropping just
+    // outside the gunwale gets boinged instead of caught
+    const grip = radius;
+    const hz = wid / 2 + grip;
+    const dx = local.x - prev.x, dz = local.z - prev.z, dy = local.y - prev.y;
+
+    for (const d of this.decks) {
+      // window of the segment spent over this deck's footprint
+      const [xLo, xHi] = this._deckX(d, grip);
+      let t0 = 0, t1 = 1;
+      let over = true;
+      for (const [p, delta, lo, hi] of [[prev.x, dx, xLo, xHi], [prev.z, dz, -hz, hz]]) {
+        if (Math.abs(delta) < 1e-6) { over = p >= lo && p <= hi; }
+        else {
+          const a = (lo - p) / delta, b = (hi - p) / delta;
+          t0 = Math.max(t0, Math.min(a, b));
+          t1 = Math.min(t1, Math.max(a, b));
+          over = t1 >= t0;
+        }
+        if (!over) break;
+      }
+      if (!over) continue;
+      // above the deck on the way in, at or under it on the way out?
+      if (prev.y + dy * t0 < d.y || prev.y + dy * t1 > d.y + 0.1) continue;
+
+      const t = THREE.MathUtils.clamp(dy < -1e-5 ? (d.y - prev.y) / dy : t1, t0, t1);
+      return {
+        type: "deck",
+        boat: this.group,
+        boatType: this.type,
+        local: new THREE.Vector3(
+          THREE.MathUtils.clamp(prev.x + dx * t, d.x0 + 0.1, d.x1 - 0.1),
+          d.y + 0.15,
+          THREE.MathUtils.clamp(prev.z + dz * t, -(wid / 2 - 0.2), wid / 2 - 0.2),
+        ),
+      };
+    }
+    return null;
+  }
+
+  /** world-space AABB-ish test in the boat's local frame */
+  collideLocal(pos, vel, radius, prevPos = null) {
+    const local = this.group.worldToLocal(pos.clone());
+    const prev = prevPos ? this.group.worldToLocal(prevPos.clone()) : local.clone();
+    const { len, wid } = this.dims;
+    const falling = vel.y < 0 || local.y < prev.y;
+
+    if (falling) {
+      // crossed a deck this frame -> land aboard and get ferried
+      const deck = this._deckLanding(prev, local, radius);
+      if (deck) return deck;
+      // still in the air above a deck: no contact yet. Waiting for the crossing
+      // keeps the landing snap-free — and stops the hull test below from
+      // boinging a stone that is on its way down INTO the boat.
+      const over = this._deckUnder(local.x, local.z, radius);
+      if (over && local.y > over.y) return null;
+    }
+
+    const hx = len / 2 + radius, hz = wid / 2 + radius;
+    if (Math.abs(local.x) > hx || Math.abs(local.z) > hz ||
+        local.y < -0.2 || local.y > this._ceilingAt(local.x)) return null;
     // otherwise: BOING — push out along the dominant axis
     const px = hx - Math.abs(local.x);
     const pz = hz - Math.abs(local.z);
@@ -227,11 +340,15 @@ export class Boats {
     for (const b of this.boats) b.update(dt, elapsed, water, particles);
   }
 
-  collide(pos, vel, radius) {
+  collide(pos, vel, radius, prevPos = null) {
+    // decks win over hulls: a stone dropping onto one boat's deck shouldn't be
+    // stolen by a hull graze on another
+    let hull = null;
     for (const b of this.boats) {
-      const hit = b.collideLocal(pos, vel, radius);
-      if (hit) return hit;
+      const hit = b.collideLocal(pos, vel, radius, prevPos);
+      if (hit?.type === "deck") return hit;
+      if (hit && !hull) hull = hit;
     }
-    return null;
+    return hull;
   }
 }

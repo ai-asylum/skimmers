@@ -50,6 +50,15 @@ function toToon(src, gradientMap) {
     toneMapped: src.toneMapped,
   });
   if (src.flatShading) m.flatShading = true;
+  // Carry a hand-written shader injection across the swap. Without this the twin
+  // compiles the stock toon shader and anything built on onBeforeCompile (the
+  // terrain's ground textures, the tree sway) silently loses it. The cache key
+  // has to come along too, or the twin shares a compiled program with an
+  // unpatched toon material that happens to have the same parameters.
+  if (src.onBeforeCompile !== THREE.Material.prototype.onBeforeCompile) {
+    m.onBeforeCompile = src.onBeforeCompile;
+    m.customProgramCacheKey = src.customProgramCacheKey;
+  }
   m.depthTest = src.depthTest;
   m.depthWrite = src.depthWrite;
   m.polygonOffset = src.polygonOffset;

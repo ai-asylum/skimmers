@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { resolve } from "path";
 
 // Skippidy Skip is a plain ES-module three.js game. Vite just bundles the
 // bare imports (three, peerjs, posthog-js) that used to come from a CDN
@@ -11,6 +12,14 @@ export default defineConfig({
     target: "es2020",
     outDir: "dist",
     assetsInlineLimit: 0, // keep pngs as files (Capacitor + PWA icons)
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, "index.html"),
+        admin: resolve(__dirname, "admin.html"),
+      },
+    },
   },
-  server: { port: 8741 },
+  // host: true binds all interfaces so a phone on the same wifi can load the
+  // dev server (needed to test touch controls on real hardware).
+  server: { port: 8741, host: true },
 });

@@ -2,7 +2,9 @@
  * Corner minimap (team scrap: baked-top-down-voxel-minimap — bake the static
  * course once per hole, then stamp live entity blips over it each tick).
  */
-import { LAKE_R } from "./water.js";
+import { LAKE_R, CHANNEL_W } from "./water.js";
+import { makeChannelCanvas } from "./channelrender.js";
+import { terrainHeightAt, LOB_CLEAR } from "./terrain.js";
 
 const SIZE = 190;
 const RANGE = 170; // world units spanned edge to edge
@@ -20,31 +22,27 @@ export class Minimap {
     return [(x / RANGE + 0.5) * SIZE, (z / RANGE + 0.5) * SIZE];
   }
 
-  /** redraw the static course layer: shore, lake, fairway path, islands, outcrops, tee, flag */
-  bake(path, islands, rocks = []) {
+  /** redraw the static course layer: winding lake, sand banks, fairway path, islands, outcrops, tee, flag */
+  bake(path, islands, rocks = [], width = CHANNEL_W) {
     const ctx = this.bakeCanvas.getContext("2d");
     const S = SIZE;
     ctx.clearRect(0, 0, S, S);
 
-    // shore backdrop
-    ctx.fillStyle = "#7cc45e";
-    ctx.beginPath();
-    ctx.arc(S / 2, S / 2, S / 2, 0, Math.PI * 2);
-    ctx.fill();
-    // sand rim
-    const lakePx = (LAKE_R / RANGE) * S;
-    ctx.fillStyle = "#eed9a4";
-    ctx.beginPath();
-    ctx.arc(S / 2, S / 2, lakePx + 7, 0, Math.PI * 2);
-    ctx.fill();
-    // water
-    const grad = ctx.createRadialGradient(S / 2, S / 2, 4, S / 2, S / 2, lakePx);
-    grad.addColorStop(0, "#12557f");
-    grad.addColorStop(1, "#2fbfd3");
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(S / 2, S / 2, lakePx, 0, Math.PI * 2);
-    ctx.fill();
+    // grass + winding water channel + sandy banks (shared with the level
+    // editor), shaded by the bank hills so you can spot the passes
+    const layer = makeChannelCanvas({
+      res: S,
+      pxToWorld: (u, v) => ({ x: (u - 0.5) * RANGE, z: (v - 0.5) * RANGE }),
+      path, width, grass: "#7cc45e", sandBand: 3,
+      heightAt: terrainHeightAt, lobClear: LOB_CLEAR,
+    });
+    ctx.drawImage(layer, 0, 0);
+    // clip everything to the round minimap frame
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(S / 2, S / 2, S / 2, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
 
     // rock outcrops (hazards — draw under the path line)
     for (const o of rocks) {

@@ -7,7 +7,7 @@
  */
 import * as THREE from "three";
 import { simulateThrow } from "./physics.js";
-import { lakeDepthAt } from "./water.js";
+import { lakeDepthAt, isWaterAt } from "./water.js";
 
 export const BOT_PERSONAS = [
   { name: "Granite Gary", color: "#e0503a", skill: 0.86, aggro: 0.35, patience: [2.6, 4.2] },
@@ -69,7 +69,15 @@ export class BotBrain {
         return;
       }
     }
+    // stranded up in the hills is its own problem: forwards is a wall, and the
+    // one line back to the fairway may be blocked by a spire
+    if (this._stranded && ctx.path) { this._escapeThrow(ctx); return; }
     this._throwAt(this._navTarget(ctx), "skip", ctx);
+  }
+
+  /** beached on the actual banks (not resting on an island in the channel) */
+  get _stranded() {
+    return this.s.state === "beached" && !isWaterAt(this.s.pos.x, this.s.pos.z);
   }
 
   /** furthest-forward fairway waypoint within throwing reach — bots follow the
@@ -87,6 +95,54 @@ export class BotBrain {
       }
     }
     return path[0];
+  }
+
+  /**
+   * Beached on the banks, where aiming at the fairway isn't enough: a ridge or
+   * a spire can sit right on that line. So sweep the whole compass through the
+   * shared preview sim and take whatever actually gets wet — falling back to
+   * the throw that makes the most ground if nothing does. Only runs while
+   * stranded, once per throw cooldown, so the extra sims are free.
+   */
+  _escapeThrow(ctx) {
+    const s = this.s;
+    const goal = this._nearestFairwayPoint(ctx.path);
+    const d0 = Math.hypot(goal.x - s.pos.x, goal.z - s.pos.z);
+    let bestScore = -Infinity, bestTh = 0, bestPw = 0.6, bestMode = "skip";
+    for (let a = 0; a < 12; a++) {
+      const th = (a / 12) * Math.PI * 2;
+      _dir.set(Math.cos(th), 0, Math.sin(th));
+      for (const mode of ["skip", "splash"]) {
+        for (const pw of [0.4, 0.6, 0.8, 1]) {
+          const sim = simulateThrow(s.pos, _dir, pw, mode, s.rock, ctx.water, ctx.elapsed, 5, ctx.islands, ctx.rocks);
+          const end = sim.points[sim.points.length - 1];
+          if (!end) continue;
+          const gain = d0 - Math.hypot(goal.x - end.x, goal.z - end.z);
+          const score = gain + (sim.end !== "beach" ? 100 : 0);
+          if (score > bestScore) { bestScore = score; bestTh = th; bestPw = pw; bestMode = mode; }
+        }
+      }
+    }
+    const wob = (1 - this.p.skill) * 0.12; // steadier than usual — just get out
+    const th = bestTh + (Math.random() - 0.5) * wob;
+    _dir.set(Math.cos(th), 0, Math.sin(th));
+    s.throwRock(_dir, bestPw, bestMode);
+  }
+
+  /** closest point on the fairway centreline — the shortest way back to water */
+  _nearestFairwayPoint(path) {
+    const { x: px, z: pz } = this.s.pos;
+    let best = path[0], bestD = Infinity;
+    for (let i = 0; i < path.length - 1; i++) {
+      const a = path[i], b = path[i + 1];
+      const bax = b.x - a.x, baz = b.z - a.z;
+      const len2 = bax * bax + baz * baz || 1;
+      const h = Math.min(1, Math.max(0, ((px - a.x) * bax + (pz - a.z) * baz) / len2));
+      const cx = a.x + bax * h, cz = a.z + baz * h;
+      const d = Math.hypot(px - cx, pz - cz);
+      if (d < bestD) { bestD = d; best = { x: cx, z: cz }; }
+    }
+    return best;
   }
 
   _splashTarget(ctx) {
@@ -114,13 +170,16 @@ export class BotBrain {
     if (dist < 0.5) return;
     _dir.normalize();
 
-    // candidate powers, judged with the shared preview sim
+    // candidate powers, judged with the shared preview sim; thudding into the
+    // banks scores badly now that they're real hills
     let bestPower = 0.7, bestErr = Infinity;
     for (const pw of [0.35, 0.5, 0.65, 0.8, 0.95]) {
       const sim = simulateThrow(s.pos, _dir, pw, mode, s.rock, ctx.water, ctx.elapsed, 5, ctx.islands, ctx.rocks);
       const endP = sim.points[sim.points.length - 1];
       if (!endP) continue;
-      const err = Math.hypot(endP.x - targetPos.x, endP.z - targetPos.z) + (sim.end === "sink" ? 8 : 0);
+      let err = Math.hypot(endP.x - targetPos.x, endP.z - targetPos.z);
+      if (sim.end === "sink") err += 8;
+      if (sim.end === "beach") err += 12;
       if (err < bestErr) { bestErr = err; bestPower = pw; }
     }
 

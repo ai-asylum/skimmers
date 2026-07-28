@@ -35,8 +35,10 @@ find a rock → shape it → paint it → skip battle
 Each hole is a fairway of buoys with doglegs and island rest stops — follow
 the minimap. Giant rock spires wall off the straight line to the flag:
 **CLONK** into one and your chain is dead (a high splash-lob can just clear
-the shorter ones). First stone inside the flag ring takes the hole; most
-holes wins.
+the shorter ones). The hole itself is a whirlpool with the flagpole planted
+bare in the middle of it, and the swirl you can see is exactly the zone that
+counts — put a stone *into* that water and it gets dragged under and you take
+the hole. Sail over the top of it and nothing happens. Most holes wins.
 
 ![spires guard the flag](media/course.png)
 
@@ -76,7 +78,13 @@ No build step. Plain ES modules; three.js comes from a CDN importmap.
   `Skimmer` physics as you, navigating the fairway waypoint by waypoint with
   skill-scaled wobble.
 - [`src/rock.js`](src/rock.js) — procedural stones: grindable lump field,
-  layered canvas skin (base coat + brush strokes), spring-loaded googly eyes.
+  layered canvas skin (base coat + brush strokes), spring-loaded googly eyes
+  that glance at whichever rival stone is nearest.
+- [`src/eyeconfig.js`](src/eyeconfig.js) — where the pupils sit in each face of
+  the eye sheet. Re-measure the whole sheet with
+  `node scripts/measure-eyes.mjs`, drag the sockets by hand in the Eyes Lab at
+  `/admin` (edits save live to any open game tab), and eyeball every face at
+  once at `/eyecheck.html`.
 - [`src/minimap.js`](src/minimap.js) — course baked once per hole, live blips
   stamped on top.
 - Reused team scraps: Spellbook's juice kit (hitstop/shake/springs), Train

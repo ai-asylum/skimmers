@@ -3,9 +3,15 @@
  * field you can grind away, a canvas-painted skin (colors + patterns), and
  * spring-jiggled googly eyes (Spring scrap from juice.js) that give every
  * rock a soul. The same generator makes the player's rock and all bot rocks.
+ *
+ * Sculpting is free-form: on top of the birth lumps every facet carries a
+ * signed displacement, so you can grind bumps flat, dig dents well past the
+ * base body, push stone back out, and — if you keep digging one spot — punch a
+ * hole clean through the stone.
  */
 import * as THREE from "three";
 import { Spring } from "./juice.js";
+import { FlatEyes } from "./flateyes.js";
 
 export const ROCK_COLORS = [
   "#8f9aa3", // river grey
@@ -20,11 +26,31 @@ export const ROCK_COLORS = [
 
 export const ROCK_PATTERNS = ["plain", "stripes", "dots", "zigzag", "flame", "star"];
 
-// googly pupils track this world position (main feeds it the camera each frame)
+// ---- free-form sculpt limits, in unit-radius units (before `size` scaling) ----
+const MAX_BULGE = 0.4; // how far out stone can be pushed
+const CORE_FLOOR = 0.18; // carving bottoms out at this fraction of the body radius
+const PUNCH_AT = 0.8; // dug this deep (fraction of body radius) and it breaks through
+const MAX_OPEN = 0.2; // share of the shell that may be holed — past this the
+                      // stone just takes a deeper pit, so it stays a stone
+
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+// quantized direction key; symmetric in each axis so a facet and its mirror
+// across the flat face always agree (that mirror is what lets a deep dig open
+// into a hole rather than a bottomless pit)
+const dirKey = (x, y, z) => {
+  const q = (v) => Math.sign(v) * Math.round(Math.abs(v) * 500);
+  return `${q(x)},${q(y)},${q(z)}`;
+};
+
+// Default gaze: the camera (main feeds it every frame). A rock can override it
+// with `lookAt()` to eye up a rival stone instead; the face still billboards to
+// the camera either way.
 const EYE_TARGET = new THREE.Vector3(0, 40, 120);
-const _eyeTmp = new THREE.Vector3();
-export function setEyeTarget(worldPos) {
+const EYE_QUAT = new THREE.Quaternion();
+export function setEyeTarget(worldPos, worldQuat) {
   EYE_TARGET.copy(worldPos);
+  if (worldQuat) EYE_QUAT.copy(worldQuat);
 }
 
 // mulberry32 — tiny seeded PRNG
@@ -136,7 +162,7 @@ export function drawRockBase(ctx, color, pattern, accent = "#16324a") {
 
 // ------------------------------------------------------------------ the rock
 export class Rock {
-  constructor({ seed = 1, lumpAmp = 0.22, thickness = 0.5, size = 0.55, color = ROCK_COLORS[0], pattern = "plain" } = {}) {
+  constructor({ seed = 1, lumpAmp = 0.22, thickness = 0.5, size = 0.55, color = ROCK_COLORS[0], pattern = "plain", expression = "neutral" } = {}) {
     this.seed = seed;
     const rand = rng(seed * 7919 + 13);
     this.size = size;
@@ -146,21 +172,29 @@ export class Rock {
     this.pattern = pattern;
     this.grit = rand(); // mojo — luck stat rolled at birth
 
+    // reactive face: a base expression + a transient "mood" that decays back
+    this.baseExpr = expression;
+    this._mood = expression;
+    this._moodT = 0;
+    this._playback = null; // killcam override; the live mood is frozen while set
+    this._gaze = null;     // world point to stare at, or null for the camera
+
     const s1 = rand() * 10, s2 = rand() * 10, s3 = rand() * 10;
     this._noiseSeeds = [s1, s2, s3];
 
-    // icosahedron, welded so grinding moves coincident face-verts together
+    // icosahedron, welded so sculpting moves coincident face-verts together
     const geo = new THREE.IcosahedronGeometry(1, 3);
     this.geo = geo;
     const pos = geo.attributes.position;
-    const groups = new Map(); // key -> { dir, verts[], lump, u, v }
+    const groups = new Map(); // key -> facet { dir, verts[], lump, lump0, disp, cut }
     const d = new THREE.Vector3();
     for (let i = 0; i < pos.count; i++) {
       d.fromBufferAttribute(pos, i).normalize();
-      const key = `${Math.round(d.x * 500)},${Math.round(d.y * 500)},${Math.round(d.z * 500)}`;
+      const key = dirKey(d.x, d.y, d.z);
       let g = groups.get(key);
       if (!g) {
-        g = { dir: d.clone(), verts: [], lump: Math.max(0, lumpNoise(d, s1, s2, s3)) };
+        const lump = Math.max(0, lumpNoise(d, s1, s2, s3));
+        g = { dir: d.clone(), verts: [], lump, lump0: lump, disp: 0, cut: false, mirror: -1 };
         groups.set(key, g);
       }
       g.verts.push(i);
@@ -168,6 +202,19 @@ export class Rock {
     this.groups = [...groups.values()];
     this.initialLumpSum = this.groups.reduce((s, g) => s + g.lump, 0) || 1;
     this.lumpAmp = lumpAmp;
+
+    // each facet's twin on the opposite flat face — a dig that reaches the core
+    // opens both at once, so light gets through
+    const idxByKey = new Map();
+    this.groups.forEach((g, i) => idxByKey.set(dirKey(g.dir.x, g.dir.y, g.dir.z), i));
+    this.groups.forEach((g) => {
+      const mi = idxByKey.get(dirKey(g.dir.x, -g.dir.y, g.dir.z));
+      g.mirror = mi === undefined ? -1 : mi;
+    });
+
+    // per-vertex "this facet is open" flags; faces touching one get collapsed
+    this._vcut = new Uint8Array(pos.count);
+    this.cutCount = 0;
 
     // Spherical UVs for the painted skin, assigned PER FACE (the icosahedron
     // buffer is non-indexed, so faces don't share attribute slots). Faces that
@@ -218,6 +265,7 @@ export class Rock {
       map: this.tex,
       flatShading: true,
       roughness: 0.8,
+      side: THREE.DoubleSide, // punched holes show the shell's inner wall
     });
     this.mesh = new THREE.Mesh(geo, this.mat);
     this.group = new THREE.Group();
@@ -240,13 +288,32 @@ export class Rock {
     return this.baseThickness * (1 - 0.4 * this.grindFrac);
   }
 
+  /** how deep a dig at `dir` can go before the stone gives way */
+  _floorAt(dir, thick) {
+    return -this._bodyRadius(dir, thick) * (1 - CORE_FLOOR);
+  }
+
   rebuild() {
     const pos = this.geo.attributes.position;
     const thick = this.thickness;
     for (const g of this.groups) {
-      const r = (this._bodyRadius(g.dir, thick) + g.lump * this.lumpAmp) * this.size;
+      const base = this._bodyRadius(g.dir, thick);
+      const r = Math.max(base * CORE_FLOOR, base + g.lump * this.lumpAmp + g.disp) * this.size;
       for (const vi of g.verts) {
         pos.setXYZ(vi, g.dir.x * r, g.dir.y * r, g.dir.z * r);
+      }
+    }
+    // open facets have no surface: collapse every face touching one to a point,
+    // which the rasterizer drops (the buffer is non-indexed, so a face owns its
+    // three slots outright and neighbours keep their own copies)
+    if (this.cutCount > 0) {
+      const vc = this._vcut;
+      for (let f = 0; f < pos.count; f += 3) {
+        if (vc[f] || vc[f + 1] || vc[f + 2]) {
+          const x = pos.getX(f), y = pos.getY(f), z = pos.getZ(f);
+          pos.setXYZ(f + 1, x, y, z);
+          pos.setXYZ(f + 2, x, y, z);
+        }
       }
     }
     pos.needsUpdate = true;
@@ -255,24 +322,131 @@ export class Rock {
     this._placeEyes();
   }
 
-  /** grind lumps near a world-space point; returns amount actually removed */
-  grindAt(worldPoint, radius = 0.5, amount = 0.3) {
+  _setCut(g, on) {
+    if (g.cut === on) return false;
+    g.cut = on;
+    this.cutCount += on ? 1 : -1;
+    for (const vi of g.verts) this._vcut[vi] = on ? 1 : 0;
+    return true;
+  }
+
+  /** open (or heal) a facet together with its twin on the far face */
+  _punch(g, on = true) {
+    if (on && this.cutCount >= this.groups.length * MAX_OPEN) return false;
+    const thick = this.thickness;
+    let changed = this._setCut(g, on);
+    const m = g.mirror >= 0 ? this.groups[g.mirror] : null;
+    for (const f of m && m !== g ? [g, m] : [g]) {
+      // an opened facet sits at the floor, so healing it later grows the stone
+      // back out of the pit — and so a networked copy lands in the same place
+      if (on) {
+        f.lump = 0;
+        f.disp = Math.min(f.disp, this._floorAt(f.dir, thick));
+      }
+      changed = this._setCut(f, on) || changed;
+    }
+    return changed;
+  }
+
+  /**
+   * Sculpt near a world-space point.
+   *  - "smooth" grinds the birth lumps off, thinning the whole stone as it goes
+   *  - "carve"  digs inward past the base body; reach the core and it punches
+   *             through into a hole
+   *  - "bulge"  pushes stone back out, filling dents and healing holes
+   * Returns how far the surface moved plus how many facets opened or closed.
+   */
+  sculptAt(worldPoint, tool = "smooth", radius = 0.5, amount = 0.3) {
     const local = this.mesh.worldToLocal(worldPoint.clone()).normalize();
-    let removed = 0;
+    const thick = this.thickness;
+    let moved = 0, ground = 0, punched = 0, healed = 0;
     for (const g of this.groups) {
       const dist = g.dir.distanceTo(local);
-      if (dist < radius && g.lump > 0) {
-        const k = (1 - dist / radius) * amount;
+      if (dist >= radius) continue;
+      // a grinder feathers off linearly; a dig bites nearly flat across the
+      // brush, so breaking through opens a hole rather than a needle prick
+      const t = dist / radius;
+      const k = (tool === "carve" ? 1 - t * t : 1 - t) * amount;
+
+      if (tool === "smooth") {
+        if (g.lump <= 0) continue;
         const take = Math.min(g.lump, k);
         g.lump -= take;
-        removed += take;
+        ground += take;
+      } else if (tool === "carve") {
+        if (g.cut) continue;
+        let dig = k;
+        if (g.lump > 0) {
+          // shave any leftover bump first, then bite into the body itself
+          const take = Math.min(g.lump, dig / this.lumpAmp);
+          g.lump -= take;
+          ground += take;
+          dig -= take * this.lumpAmp;
+        }
+        if (dig <= 0) continue;
+        const floor = this._floorAt(g.dir, thick);
+        const next = Math.max(floor, g.disp - dig);
+        moved += g.disp - next;
+        g.disp = next;
+        if (g.disp <= -this._bodyRadius(g.dir, thick) * PUNCH_AT && this._punch(g)) punched++;
+      } else if (tool === "bulge") {
+        if (g.cut) {
+          // stone grows back from the bottom of the pit it was carved out of
+          this._punch(g, false);
+          g.disp = this._floorAt(g.dir, thick);
+          healed++;
+        }
+        const next = Math.min(MAX_BULGE, g.disp + k);
+        moved += next - g.disp;
+        g.disp = next;
       }
     }
-    if (removed > 0) {
-      this.grindFrac = Math.min(1, this.grindFrac + removed / this.initialLumpSum);
-      this.rebuild();
+    if (ground > 0) this.grindFrac = Math.min(1, this.grindFrac + ground / this.initialLumpSum);
+    if (moved > 0 || ground > 0 || punched || healed) this.rebuild();
+    return { moved: moved + ground * this.lumpAmp, punched, healed };
+  }
+
+  /** back to the stone you picked up off the beach */
+  resetShape() {
+    for (const g of this.groups) {
+      g.lump = g.lump0;
+      g.disp = 0;
+      this._setCut(g, false);
     }
-    return removed;
+    this.grindFrac = 0;
+    this.rebuild();
+  }
+
+  /** compact sculpt payload for the wire: one signed byte per facet */
+  sculptData() {
+    const bytes = new Int8Array(this.groups.length);
+    for (let i = 0; i < bytes.length; i++) {
+      const g = this.groups[i];
+      const off = g.lump * this.lumpAmp + g.disp;
+      bytes[i] = g.cut ? -128 : Math.round(Math.max(-1, Math.min(1, off)) * 127);
+    }
+    return btoa(String.fromCharCode(...new Uint8Array(bytes.buffer)));
+  }
+
+  /** rebuild a remote player's sculpt (set `grindFrac` first — it sets thickness) */
+  applySculptData(b64) {
+    if (!b64) return;
+    const bin = atob(b64);
+    const n = Math.min(this.groups.length, bin.length);
+    const thick = this.thickness;
+    for (let i = 0; i < n; i++) {
+      const g = this.groups[i];
+      const v = (bin.charCodeAt(i) << 24) >> 24; // back to signed
+      g.lump = 0;
+      if (v === -128) {
+        g.disp = this._floorAt(g.dir, thick);
+        this._setCut(g, true);
+      } else {
+        g.disp = v / 127;
+        this._setCut(g, false);
+      }
+    }
+    this.rebuild();
   }
 
   /** redraw base coat + stroke layer into the live texture */
@@ -335,65 +509,83 @@ export class Rock {
   }
 
   // ---- stats driving the skip physics ----
-  /** 0..1: how flat/smooth — raises skip angle tolerance + restitution */
+  /** 0..1: how flat/smooth — raises skip angle tolerance + restitution.
+   *  Dents count against you exactly like leftover bumps do; open facets are
+   *  gone rather than rough, so a clean hole doesn't spoil the belly. */
   get flat() {
-    const lumpLeft = this.groups.reduce((s, g) => s + g.lump, 0) / this.initialLumpSum;
-    const smooth = 1 - lumpLeft;
+    let dev = 0;
+    for (const g of this.groups) {
+      if (!g.cut) dev += Math.abs(g.lump * this.lumpAmp + g.disp);
+    }
+    const smooth = clamp01(1 - dev / (this.initialLumpSum * this.lumpAmp || 1));
     const thin = 1 - (this.thickness - 0.28) / 0.45;
-    return Math.max(0, Math.min(1, smooth * 0.55 + thin * 0.45));
+    return clamp01(smooth * 0.55 + thin * 0.45);
   }
-  /** 0..1: mass-ish — raises carry (speed retention) but sinks harder */
+  /** 0..1: how much of the stone has been hollowed out by holes */
+  get holeFrac() {
+    return clamp01(this.cutCount / (this.groups.length * MAX_OPEN));
+  }
+  /** 0..1: mass-ish — raises carry (speed retention) but sinks harder. Drilling
+   *  a hole through the middle genuinely lightens the stone. */
   get heft() {
-    return Math.max(0, Math.min(1, (this.thickness * this.size) / 0.35));
+    return clamp01(((this.thickness * this.size) / 0.35) * (1 - 0.55 * this.holeFrac));
   }
 
-  // ---- googly eyes ----
+  // ---- flat-outline eyes with shader pupils (see flateyes.js) ----
   _buildEyes() {
-    this.eyes = new THREE.Group();
-    this.pupilSprings = [];
-    const whiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
-    const pupilMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
-    for (let i = 0; i < 2; i++) {
-      const eye = new THREE.Group();
-      const white = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), whiteMat);
-      white.scale.z = 0.55;
-      eye.add(white);
-      const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.085, 8, 6), pupilMat);
-      pupil.position.z = 0.09;
-      eye.add(pupil);
-      eye.userData.pupil = pupil;
-      this.eyes.add(eye);
-      this.pupilSprings.push({ x: new Spring(0, 260, 9), y: new Spring(0, 260, 9) });
-    }
+    this.flatEyes = new FlatEyes(this.baseExpr);
+    this.eyes = this.flatEyes.object; // a single billboard plane carrying both eyes
     this.group.add(this.eyes);
   }
 
   _placeEyes() {
-    // eyes sit on the top-front of the stone, looking forward (+x is travel dir)
+    // the face is a camera-facing billboard (orientation handled per-frame in
+    // FlatEyes.update); here we just size it and sit it on the upper-front of
+    // the stone. +x is the travel direction, so nudging +x keeps the face on
+    // the leading edge where it reads best.
     const thick = this.thickness;
     const up = this._bodyRadius(new THREE.Vector3(0, 1, 0).normalize(), thick) * this.size;
-    const sep = 0.24 * this.size * 2.2;
-    this.eyes.children.forEach((eye, i) => {
-      const side = i === 0 ? -1 : 1;
-      eye.position.set(0.32 * this.size * 1.6, up * 0.82, side * sep * 0.5);
-      eye.rotation.set(0, side * 0.28, -0.5);
-      eye.rotation.y += Math.PI / 2 * 0; // face +x via lookAt below
-      eye.lookAt(
-        eye.position.x + 1,
-        eye.position.y + 0.55,
-        eye.position.z + side * 0.35
-      );
-      const s = this.size * 2.0;
-      eye.scale.setScalar(s);
-    });
+    const plane = this.eyes;
+    plane.scale.setScalar(this.size * 1.45);
+    plane.position.set(0.12 * this.size, up * 0.32, 0);
   }
 
-  /** jolt the googly pupils (impacts, throws) */
+  /** the face currently on screen */
+  get expression() {
+    return this.flatEyes.expression;
+  }
+
+  /** temporary reaction face that eases back to the base expression */
+  react(expr, dur = 1.1) {
+    this._mood = expr;
+    this._moodT = dur;
+    if (!this._playback) this.flatEyes.setExpression(expr);
+  }
+
+  /**
+   * Drive the face from recorded frames (killcam). The live mood is held where
+   * it was and restored when playback ends with `setPlaybackExpression(null)`.
+   */
+  setPlaybackExpression(expr) {
+    if (expr === this._playback) return;
+    this._playback = expr;
+    this.flatEyes.setExpression(expr ?? this._mood);
+  }
+
+  /** jolt the pupils (impacts, throws) */
   kickEyes(v = 1) {
-    for (const s of this.pupilSprings) {
-      s.x.kick((Math.random() - 0.5) * 2.4 * v);
-      s.y.kick((Math.random() - 0.5) * 2.4 * v);
-    }
+    this.flatEyes.kick(v);
+  }
+
+  /** 0..1 face opacity — used to peek past the eyes while sculpting */
+  fadeEyes(v) {
+    this.flatEyes.setFade(v);
+  }
+
+  /** stare at a world point (a rival stone, the flag); null goes back to the camera */
+  lookAt(worldPoint) {
+    if (!worldPoint) { this._gaze = null; return; }
+    this._gaze = (this._gaze || new THREE.Vector3()).copy(worldPoint);
   }
 
   /** squash the whole stone (skip contacts, landings) */
@@ -402,26 +594,16 @@ export class Rock {
   }
 
   update(dt) {
-    this.eyes.children.forEach((eye, i) => {
-      const s = this.pupilSprings[i];
-      const px = Math.max(-0.07, Math.min(0.07, s.x.update(dt)));
-      const py = Math.max(-0.07, Math.min(0.07, s.y.update(dt)));
-      // pupil rides ON the eyeball surface toward the camera (front
-      // hemisphere only), spring jiggle folded into the direction — placing
-      // it on the ellipsoid keeps it visible from any angle instead of
-      // sinking inside the white
-      const d = eye.worldToLocal(_eyeTmp.copy(EYE_TARGET)).normalize();
-      if (d.z < 0.25) {
-        d.z = 0.25;
-        d.normalize();
+    // decay any transient mood back to the base expression
+    if (this._moodT > 0 && !this._playback) {
+      this._moodT -= dt;
+      if (this._moodT <= 0 && this._mood !== this.baseExpr) {
+        this._mood = this.baseExpr;
+        this.flatEyes.setExpression(this.baseExpr);
       }
-      d.x += px * 0.6;
-      d.y += py * 0.6;
-      d.normalize();
-      // eyeball is a 0.16-radius sphere squashed to 0.088 in z
-      const rr = 1 / Math.sqrt((d.x * d.x + d.y * d.y) / (0.16 * 0.16) + (d.z * d.z) / (0.088 * 0.088));
-      eye.userData.pupil.position.set(d.x * rr * 1.04, d.y * rr * 1.04, d.z * rr * 1.04);
-    });
+    }
+    this.flatEyes.update(dt, this._gaze || EYE_TARGET, EYE_QUAT);
+
     const sq = Math.max(0.45, Math.min(1.45, this.squash.update(dt)));
     const w = 1 + (1 - sq) * 0.55; // conserve apparent volume
     this.group.scale.set(w, sq, w);

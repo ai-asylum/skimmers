@@ -7,13 +7,20 @@
  */
 import * as THREE from "three";
 import { audio } from "./audio.js";
-import { lakeDepthAt, WATER_Y } from "./water.js";
+import { lakeDepthAt, bedHeightAt, DIVE_MIN, WATER_Y } from "./water.js";
+import { terrainHeightAt } from "./terrain.js";
 import { els } from "./ui.js";
 
 const ROCK_Y = 0.55; // local y of the rock on the bed
 export const HOOK_SPEED = 2.0;
 const STEER_RANGE = 8.5;
 export const BUOY_REST = 0.42; // rock center height above the waterline when nestled in the buoy
+
+// view-picking (see _pickView): the lake is a narrow bowl, so a fixed camera
+// azimuth regularly ends up buried in the bank or staring into a spire
+const VIEW_YAWS = 24; // azimuths tried around the sink spot
+const VIEW_PULLINS = [1, 0.82, 0.66]; // and how far we'll crowd the rock to get out of the way
+const SIGHT_CLEARANCE = 0.6; // world units the sightline must clear the lake bed by
 
 const _tip = new THREE.Vector3();
 
@@ -48,6 +55,13 @@ export class Fishing {
     this.active = false;
     this.onDone = null;
     this.rock = null;
+
+    // chosen view: the diorama is yawed to face the camera, so its local x/y
+    // plane (the whole 2D minigame) always reads flat on screen
+    this.camYaw = 0;
+    this.camDist = 12;
+    this._sin = 0;
+    this._cos = 1;
 
     // ---------- the buoy: a small inflatable ring carrying the line ----
     // Scene-level, NOT part of the diorama group — it stays behind after the
@@ -119,39 +133,36 @@ export class Fishing {
     dome.position.y = 8;
     g.add(dome);
 
-    // sandy bed — a radially subdivided disc (innerR≈0 so it's solid) whose
-    // vertices get displaced in start() to follow the real lake-bed bowl, so
-    // you can see the ground curve away under you
-    const floorGeo = new THREE.RingGeometry(0.001, 30, 48, 12);
-    floorGeo.rotateX(-Math.PI / 2); // lie flat in xz, y up
-    const floor = new THREE.Mesh(
-      floorGeo,
-      new THREE.MeshStandardMaterial({ color: 0xc8b98a, flatShading: true })
-    );
-    this.floor = floor;
-    g.add(floor);
-    // scattered pebbles
+    // No floor of our own: the ground down here is the lake bed of the real
+    // terrain mesh (src/terrain.js), which now carries the bowl all the way up
+    // to the beach. The dressing below just gets seated onto it in start().
+    this.dressing = [];
     const pebbleMat = new THREE.MeshStandardMaterial({ color: 0x8f9aa3, flatShading: true });
     for (let i = 0; i < 10; i++) {
       const p = new THREE.Mesh(new THREE.SphereGeometry(0.2 + Math.random() * 0.3, 6, 5), pebbleMat);
       const a = Math.random() * Math.PI * 2;
       const r = 3 + Math.random() * 12;
-      p.position.set(Math.cos(a) * r, 0.12, Math.sin(a) * r);
+      p.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+      p.userData.sit = 0.12;
       p.scale.y = 0.6;
       g.add(p);
+      this.dressing.push(p);
     }
 
     // seaweed (swayed in update)
     this.weeds = [];
     const weedMat = new THREE.MeshStandardMaterial({ color: 0x2e7d4f, flatShading: true });
     for (let i = 0; i < 7; i++) {
-      const w = new THREE.Mesh(new THREE.ConeGeometry(0.22, 2.6 + Math.random() * 2, 5), weedMat);
+      const h = 2.6 + Math.random() * 2;
+      const w = new THREE.Mesh(new THREE.ConeGeometry(0.22, h, 5), weedMat);
       const a = Math.random() * Math.PI * 2;
       const r = 4.5 + Math.random() * 9;
-      w.position.set(Math.cos(a) * r, 1.3, Math.sin(a) * r);
+      w.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+      w.userData.sit = h / 2;
       w.userData.phase = Math.random() * 10;
       g.add(w);
       this.weeds.push(w);
+      this.dressing.push(w);
     }
 
     // light shafts from the surface
@@ -213,37 +224,37 @@ export class Fishing {
     this._tickY = 0;
   }
 
-  /** dive in: the lake bed is a bowl — the diorama floor sits at the real
-   *  depth under the sink spot, so shoreline dives are quick grabs and
-   *  mid-lake sinks are a long, fishy descent */
-  start(spot, rock, onDone) {
+  /** dive in: the diorama sits on the real lake bed under the sink spot, so
+   *  bank-side dives are quick grabs and mid-channel sinks are a long, fishy
+   *  descent */
+  start(spot, rock, onDone, blockers = []) {
     this.active = true;
     this.onDone = onDone;
     this.rock = rock;
     this.hits = 0;
     this.phase = "fall"; // fall -> drop -> reel
+    spot = this._diveSpot(spot);
     this.depth = lakeDepthAt(spot.x, spot.z);
     this.floorY = -this.depth;
-    this.hookStart = Math.max(2.4, this.depth - 1.1); // local: just under the surface
+    // local, just under the surface — DIVE_MIN keeps the floor clear of it
+    this.hookStart = Math.max(2.4, this.depth - 1.1);
+    this._pickView(spot, blockers);
     this.group.position.set(spot.x, this.floorY, spot.z);
+    this.group.rotation.y = this.camYaw; // face the diorama at the camera
     this.group.visible = true;
 
-    // buoy bobs on the surface above; the line drops from its bow edge
-    this.buoy.position.set(spot.x, WATER_Y, spot.z - 0.9);
-    this.buoy.rotation.set(0, 0, 0);
+    // buoy bobs on the surface above, just past the rock; the line drops from
+    // its bow edge, which faces the camera along with the rest of the diorama
+    this.buoy.position.set(this._worldX(0, -0.9), WATER_Y, this._worldZ(0, -0.9));
+    this.buoy.rotation.set(0, this.camYaw, 0);
     this.buoy.visible = true;
 
-    // shape the sandy bed to the real bowl around this spot: each vertex sits
-    // at the actual lake-bed height relative to the diorama origin, so the
-    // ground visibly curves upward toward the shore side
-    const pos = this.floor.geometry.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const lx = pos.getX(i), lz = pos.getZ(i);
-      const worldDepth = lakeDepthAt(spot.x + lx, spot.z + lz);
-      pos.setY(i, this.depth - worldDepth); // local y; 0 at the spot itself
+    // sit the pebbles and weeds on the bed where they actually stand, so they
+    // follow the slope of the terrain instead of hovering at the spot's depth
+    for (const d of this.dressing) {
+      const wy = bedHeightAt(this._worldX(d.position.x, d.position.z), this._worldZ(d.position.x, d.position.z));
+      d.position.y = wy - this.floorY + d.userData.sit;
     }
-    pos.needsUpdate = true;
-    this.floor.geometry.computeVertexNormals();
 
     // your stone tumbles down from the surface first; the line comes after
     this._rockSaved = { parent: rock.group.parent, pos: rock.group.position.clone(), rot: rock.group.rotation.clone() };
@@ -287,9 +298,83 @@ export class Fishing {
     const p = this.group.position;
     const d = this.depth ?? 10;
     return {
-      pos: new THREE.Vector3(p.x, this.floorY + d * 0.42 + 1.2, p.z + 7.5 + d * 0.55),
+      pos: new THREE.Vector3(p.x + this._sin * this.camDist, this.floorY + d * 0.42 + 1.2, p.z + this._cos * this.camDist),
       look: new THREE.Vector3(p.x, this.floorY + d * 0.38, p.z),
     };
+  }
+
+  /**
+   * Where to stage the dive. A stone can settle in the shallows against a bank,
+   * where there is no water column to fish in, so let the spot roll downhill
+   * along the bed until it has DIVE_MIN of water over it. The camera cuts, so
+   * the few metres it travels are never seen.
+   */
+  _diveSpot(spot) {
+    const p = { x: spot.x, z: spot.z };
+    const step = 1.5;
+    for (let i = 0; i < 24 && -bedHeightAt(p.x, p.z) < DIVE_MIN; i++) {
+      const gx = bedHeightAt(p.x + step, p.z) - bedHeightAt(p.x - step, p.z);
+      const gz = bedHeightAt(p.x, p.z + step) - bedHeightAt(p.x, p.z - step);
+      const l = Math.hypot(gx, gz);
+      if (l < 1e-4) break;
+      p.x -= (gx / l) * step;
+      p.z -= (gz / l) * step;
+    }
+    return p;
+  }
+
+  /** diorama-local x/z offset -> world, honouring the view yaw */
+  _worldX(lx, lz) { return this.group.position.x + lx * this._cos + lz * this._sin; }
+  _worldZ(lx, lz) { return this.group.position.z - lx * this._sin + lz * this._cos; }
+
+  /**
+   * Pick the azimuth (and how close to sit) for the dive camera. The lake bed is
+   * a bowl barely wider than the fairway, so the old fixed +Z view often sank
+   * into the bank or wedged a spire in front of the rock. Score a ring of
+   * candidate views on how far the sightline clears the bed and the outcrops,
+   * with a nudge back toward the default so the framing stays familiar.
+   * `blockers`: [{x, z, r}] world-space cylinders (the hole's rock outcrops).
+   */
+  _pickView(spot, blockers) {
+    const d = this.depth;
+    const baseDist = 7.5 + d * 0.55;
+    const camY = this.floorY + d * 0.42 + 1.2;
+    // the strictest sightline is the one to the rock sitting on the bed — the
+    // bowl rising toward the shore is what buries the view, not the spires
+    const rockY = this.floorY + ROCK_Y + 0.8;
+    let bestCost = Infinity;
+    for (let i = 0; i < VIEW_YAWS; i++) {
+      // signed yaw in (-PI, PI] so the turn-away penalty is symmetric
+      const yaw = ((i / VIEW_YAWS) * Math.PI * 2 + Math.PI) % (Math.PI * 2) - Math.PI;
+      const s = Math.sin(yaw), c = Math.cos(yaw);
+      for (const pull of VIEW_PULLINS) {
+        const dist = baseDist * pull;
+        let cost = Math.abs(yaw) * 0.5 + (1 - pull) * 5;
+        // does the line of sight graze the ground on its way out? (terrain, not
+        // the smooth bowl: the shoreline wobbles and the banks carry hills)
+        for (let k = 2; k <= 10; k++) {
+          const t = k / 10;
+          const groundY = terrainHeightAt(spot.x + s * dist * t, spot.z + c * dist * t);
+          const buried = groundY + SIGHT_CLEARANCE - (rockY + (camY - rockY) * t);
+          if (buried > 0) cost += buried * 4;
+        }
+        // ...or run through an outcrop?
+        for (const b of blockers) {
+          const along = ((b.x - spot.x) * s + (b.z - spot.z) * c) / dist;
+          if (along < 0.02 || along > 1.15) continue;
+          const perp = Math.hypot(b.x - (spot.x + s * dist * along), b.z - (spot.z + c * dist * along));
+          const overlap = b.r + 2.2 - perp;
+          if (overlap > 0) cost += 8 + overlap * 4;
+        }
+        if (cost < bestCost) {
+          bestCost = cost;
+          this.camYaw = yaw;
+          this.camDist = dist;
+        }
+      }
+    }
+    this._sin = Math.sin(this.camYaw);
+    this._cos = Math.cos(this.camYaw);
   }
 
   /** pointerX01: pointer x in [0,1] across the screen */
@@ -313,9 +398,9 @@ export class Fishing {
     this._bubbleT -= dt;
     if (this._bubbleT <= 0) {
       this._bubbleT = 0.3 + Math.random() * 0.5;
-      const p = this.group.position;
+      const bx = (Math.random() - 0.5) * 14, bz = (Math.random() - 0.5) * 4;
       this.particles.glow.emit(
-        p.x + (Math.random() - 0.5) * 14, this.floorY + 0.5 + Math.random() * 3, p.z + (Math.random() - 0.5) * 4,
+        this._worldX(bx, bz), this.floorY + 0.5 + Math.random() * 3, this._worldZ(bx, bz),
         0, 1.2 + Math.random(), 0, 1.5 + Math.random(), 2 + Math.random() * 2,
         0.65, 0.85, 1.0, -1.2, 0.4
       );
@@ -340,10 +425,11 @@ export class Fishing {
       const fallSpeed = Math.max(2, this.depth / 2.4);
       this.fallY = Math.max(ROCK_Y, this.fallY - fallSpeed * dt);
       const wp = this.group.position;
+      const sway = Math.sin(elapsed * 2.1 + this.fallPhase) * 0.35;
       this.rock.group.position.set(
-        wp.x + Math.sin(elapsed * 2.1 + this.fallPhase) * 0.35,
+        this._worldX(sway, 0),
         this.floorY + this.fallY,
-        wp.z
+        this._worldZ(sway, 0)
       );
       this.rock.group.rotation.x += dt * 0.9;
       this.rock.group.rotation.y += dt * 0.5;
@@ -357,7 +443,8 @@ export class Fishing {
       if (this.fallY <= ROCK_Y) {
         this.phase = "drop";
         this.rock.group.position.set(wp.x, this.floorY + ROCK_Y, wp.z);
-        this.rock.group.rotation.set(0, this.rock.group.rotation.y, 0);
+        // face the camera, so the reel-in roll reads as a screen-plane swing
+        this.rock.group.rotation.set(0, this.camYaw, 0);
         this.rock.squashKick?.(0.8);
         this.rock.kickEyes(1.2);
         this.hook.visible = true;
@@ -409,8 +496,9 @@ export class Fishing {
           this.swingVel += (Math.random() - 0.5) * 8; // the bump sets the line swinging
           audio.fishMiss();
           this.rock.kickEyes(1);
-          const wp = this.group.position;
-          this.particles.glow.emit(wp.x + dispX, this.floorY + this.hookY, wp.z, dx * 2, 1, 0,
+          this.particles.glow.emit(
+            this._worldX(dispX, 0), this.floorY + this.hookY, this._worldZ(dispX, 0),
+            dx * 2 * this._cos, 1, dx * -2 * this._sin,
             0.4, 5, 1.0, 0.6, 0.3, 2, 1);
         }
       }
@@ -430,9 +518,9 @@ export class Fishing {
       this.hookY += 7.5 * dt;
       this.hookX *= 1 - Math.min(1, 6 * dt);
       this.rock.group.position.set(
-        this.group.position.x + dispX,
+        this._worldX(dispX, 0),
         this.floorY + this.hookY - 0.5,
-        this.group.position.z
+        this._worldZ(dispX, 0)
       );
       this.rock.group.rotation.z = this.swingAng * 0.6 + Math.sin(this.hookY * 2) * 0.1;
       if (Math.random() < 0.4) {
@@ -454,7 +542,8 @@ export class Fishing {
   /** the line's tie-off point in diorama-local coords (the rope's 2D x/y plane) */
   _lineTopLocal() {
     this.lineAnchor.getWorldPosition(_tip);
-    return { x: _tip.x - this.group.position.x, y: _tip.y - this.group.position.y };
+    this.group.worldToLocal(_tip); // the diorama is yawed at the camera
+    return { x: _tip.x, y: _tip.y };
   }
 
   _updateRope(dt, dispX, topX, topY) {
