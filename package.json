@@ -6,8 +6,10 @@
     "dev": "vite",
     "build": "vite build && cp -r store dist/store",
     "build:playable": "node scripts/build-playable.mjs",
+    "bake:fish": "node scripts/bake-fish.mjs",
+    "bake:nature": "node scripts/bake-nature.mjs",
     "preview": "vite preview --port 8741",
-    "test": "node scripts/mc-selftest.mjs && node scripts/rock-selftest.mjs",
+    "test": "node scripts/mc-selftest.mjs && node scripts/rock-selftest.mjs && node scripts/check-career.mjs",
     "start": "vite"
   },
   "dependencies": {

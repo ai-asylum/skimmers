@@ -2,11 +2,14 @@
  * The skip simulation. One Skimmer per racer (human and bots run the exact
  * same code — ghost-matchmaking spirit: rivals play through identical systems).
  *
- * A throw is ballistic; on water contact the entry angle + speed + rock
- * flatness decide: SKIP (shallow + fast), SETTLE (slow), or SINK (steep).
- * Flat, fast throws chain hops. Splash lobs detonate on impact and knock
- * rival stones under. simulateThrow() runs the identical step for the
- * aiming preview, so the dots never lie.
+ * A throw is ballistic, and what happens when it reaches the lake is decided by
+ * the angle the stone makes with the water surface: flat enough (and fast
+ * enough) and it SKIPS, spent and barely tipped over and it SETTLES, anything
+ * steeper SINKS — and a perpendicular entry sinks no matter what. How steep the
+ * entry was also sets how long the stone spends under. Splash lobs are the one
+ * exception: they are thrown to detonate, so they come down flat on purpose.
+ * simulateThrow() runs the identical step for the aiming preview, so the dots
+ * never lie.
  *
  * The hole is a whirlpool, and taking it is a water-contact test (_checkFlag):
  * the stone has to touch down inside the rim. Flying over the top never counts.
@@ -16,14 +19,26 @@ import {
   WATER_Y, lakeDepthAt, sunkRestY, isWaterAt, vortexSurfaceY,
 } from "./water.js";
 import { terrainHeightAt } from "./terrain.js";
+import { DEFAULT_MODS } from "./upgrades.js";
 
 export const GRAVITY = 14;
 export const MAX_SPEED = 27;
 export const SKIP_ELEV = 0.16; // radians above horizontal for a flat skip throw
 export const LOB_ELEV = 0.92; // radians for a splash lob
 export const MAX_ELEV = 1.30; // steepest the player can aim — near enough straight up
-export const PLOP_ELEV = 0.55; // above this the stone comes down flat and settles
 export const BLAST_R = 2.6; // splash lob knock radius
+
+// Water entry, measured as the angle between the stone's path and the surface:
+// 0 is travelling flat along the water, π/2 is straight down into it.
+export const PERP_ANGLE = 1.15; // ~66°: near enough perpendicular, always sinks
+export const SETTLE_ANGLE = 0.9; // ~52°: the steepest a spent stone can float on
+
+// How long a sunk stone is under before it can be fished back, by how steeply it
+// went in. A stone that knifes in travels a straight line you can follow
+// straight down to it; a shallow glug tumbles and wallows on the way, and costs
+// you the extra seconds.
+const SINK_TIME_SHALLOW = 1.5;
+const SINK_TIME_STEEP = 0.45;
 
 /**
  * Launch angle for a throw. The player aims this directly (main.js maps the
@@ -62,12 +77,34 @@ function hitOutcrop(pos, rocks) {
   return null;
 }
 
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+
+/** the angle this velocity makes with the (flat) water surface, in radians */
+function entryAngle(vel) {
+  return Math.atan2(-vel.y, Math.max(0.001, Math.hypot(vel.x, vel.z)));
+}
+
+/**
+ * 0 = as flat as an entry can be and still go under, 1 = perpendicular. It
+ * saturates at PERP_ANGLE rather than at a true right angle, because that is the
+ * steepest anyone can actually throw — normalising against straight down would
+ * squeeze the whole playable range into the bottom half of the scale.
+ */
+function steepness(angle, critAngle) {
+  return clamp01((angle - critAngle) / Math.max(0.001, PERP_ANGLE - critAngle));
+}
+
 export class Skimmer {
   constructor(rock, name, isPlayer = false, tint = "#ffd24a") {
     this.rock = rock; // Rock instance (owns the mesh)
     this.name = name;
     this.isPlayer = isPlayer;
     this.tint = tint;
+    // Everything the two equipped upgrades add up to (upgrades.js). A stone
+    // with nothing bolted on carries the defaults, and every formula below
+    // collapses to the numbers it had before there were upgrades at all.
+    this.mods = { ...DEFAULT_MODS };
+    this.shieldsLeft = 0; // splashes this stone can still shrug off this hole
 
     this.pos = new THREE.Vector3();
     this.vel = new THREE.Vector3();
@@ -77,6 +114,7 @@ export class Skimmer {
     this.throws = 0; // this hole
     this.totalThrows = 0;
     this.holesWon = 0;
+    this.points = 0; // match total, scored per hole by the order you hole out in
     this.finished = false; // reached flag this hole
     this.spin = 0;
     this.boat = null; // riding a boat
@@ -84,6 +122,8 @@ export class Skimmer {
     this.lastThrowMode = "skip";
     this.lastThrowElev = SKIP_ELEV;
     this.sinkT = 0;
+    this.sinkSteep = 0; // how perpendicular the entry that sank us was
+    this.sinkDelay = SINK_TIME_SHALLOW; // seconds under before it can be fished back
     this.bobPhase = Math.random() * 10;
     this.restY = 0.06; // rest height above the waves (raised on the buoy / tee bridge)
     this.hookedByLine = false; // a rival fishing line is reeling this stone up
@@ -101,6 +141,16 @@ export class Skimmer {
   }
 
   get mesh() { return this.rock.group; }
+
+  /** bolt a resolved upgrade bag on (see upgrades.js `resolveMods`) */
+  setMods(mods) {
+    this.mods = { ...DEFAULT_MODS, ...(mods ?? {}) };
+    this.shieldsLeft = this.mods.shields;
+    return this;
+  }
+
+  /** an upgrade just earned its shells — main.js turns this into noise */
+  _proc(id, at = this.pos) { this._emit("proc", { id, at: at.clone() }); }
 
   // still parked on the starting tee bridge — hasn't thrown this hole yet, so
   // it's off-limits to rival splash knocks (no getting blasted before you play)
@@ -124,6 +174,9 @@ export class Skimmer {
     this.finished = false;
     this.knocked = false;
     this.state = "resting";
+    this.lastThrowMode = "skip"; // no stale lob carried into the new hole
+    this.lastThrowElev = SKIP_ELEV;
+    this.shieldsLeft = this.mods.shields; // Bulwark rearms every hole
   }
 
   _emit(type, data) { this.onEvent?.(type, { skimmer: this, ...data }); }
@@ -136,7 +189,9 @@ export class Skimmer {
     if (this.state !== "resting" && this.state !== "beached" && this.state !== "onboat") return false;
     if (this.boat) { this.boat = null; } // leaving the ferry
     const e = launchElev(power, mode, elev);
-    const speed = MAX_SPEED * (0.28 + 0.72 * power) * (mode === "skip" ? 1 : 0.68);
+    const floor = this.mods.powerFloor;
+    const speed = MAX_SPEED * (floor + (1 - floor) * power)
+      * (mode === "skip" ? 1 : 0.68) * this.mods.speedMul;
     const cosE = Math.cos(e), sinE = Math.sin(e);
     this.vel.set(dirXZ.x * cosE * speed, sinE * speed, dirXZ.z * cosE * speed);
     this.pos.y = Math.max(this.pos.y, WATER_Y + 0.5); // buoy/bridge lies launch from their height
@@ -180,13 +235,17 @@ export class Skimmer {
               this.vel.x -= 2 * dot * nx;
               this.vel.z -= 2 * dot * nz;
             }
-            this.vel.x *= 0.4;
-            this.vel.z *= 0.4;
-            this.vel.y = Math.min(this.vel.y * 0.4, 1.5);
-            this.skips = Math.max(this.skips, 1); // a clonk breaks the chain
+            // Bumper Stone turns the CLONK into a wall rebound: most of the
+            // speed survives and, crucially, so does the chain
+            const bounced = this.mods.clonkChain;
+            this.vel.x *= this.mods.clonkKeep;
+            this.vel.z *= this.mods.clonkKeep;
+            this.vel.y = Math.min(this.vel.y * 0.4, bounced ? 3 : 1.5);
+            if (!bounced) this.skips = Math.max(this.skips, 1); // a clonk breaks the chain
+            else this._proc("bumperstone", this.pos);
             this.rock.kickEyes(2);
             this.rock.squashKick?.(1.1);
-            this._emit("clonk", { at: this.pos.clone() });
+            this._emit("clonk", { at: this.pos.clone(), bounced });
           }
         }
 
@@ -204,7 +263,7 @@ export class Skimmer {
             // BOING — elastic rebound off the hull; bank shots keep the chain
             const n = hit.normal;
             const d = this.vel.dot(n);
-            if (d < 0) this.vel.addScaledVector(n, -1.92 * d);
+            if (d < 0) this.vel.addScaledVector(n, -this.mods.hullRest * d);
             this.vel.x *= 0.94;
             this.vel.z *= 0.94;
             this.vel.y = Math.max(this.vel.y * 0.5, 2.4); // pop up and keep flying
@@ -233,7 +292,8 @@ export class Skimmer {
           const at = ctx.hitDuck(this.pos, this.vel);
           if (at) {
             const before = Math.hypot(this.vel.x, this.vel.z);
-            const boosted = Math.min(MAX_SPEED * 1.3, before * 1.28 + 2);
+            const duck = this.mods.duckMul;
+            const boosted = Math.min(MAX_SPEED * (1 + duck * 0.24), before * duck + 2);
             const boostScale = boosted / Math.max(0.001, before);
             this.vel.x *= boostScale;
             this.vel.z *= boostScale;
@@ -261,7 +321,7 @@ export class Skimmer {
           let landed = false;
           for (const isl of ctx.islands) {
             const d = Math.hypot(this.pos.x - isl.x, this.pos.z - isl.z);
-            if (d < isl.r * 0.85 && this.pos.y <= 0.55 && this.vel.y < 0) {
+            if (d < isl.r * this.mods.islandR && this.pos.y <= 0.55 && this.vel.y < 0) {
               this.pos.y = 0.45;
               this.vel.set(0, 0, 0);
               this.state = "beached";
@@ -307,8 +367,11 @@ export class Skimmer {
       case "sinking": {
         this.sinkT += dt;
         const bed = sunkRestY(this.pos.x, this.pos.z);
-        this.pos.y = Math.max(bed, this.pos.y - dt * (1.2 + this.rock.heft * 1.6));
-        this.vel.multiplyScalar(1 - 2.5 * dt);
+        // the steeper it went in, the harder it drives down
+        const fall = (1.2 + this.rock.heft * 1.6) * (0.7 + 1.7 * this.sinkSteep) * this.mods.sinkMul;
+        this.pos.y = Math.max(bed, this.pos.y - dt * fall);
+        // Deep Glide keeps most of the drift, so going under still gains ground
+        this.vel.multiplyScalar(1 - 2.5 * (1 - 0.8 * this.mods.sinkGlide) * dt);
         this.pos.x += this.vel.x * dt;
         this.pos.z += this.vel.z * dt;
         break;
@@ -378,73 +441,130 @@ export class Skimmer {
   }
 
   _waterContact(ctx, waterY) {
+    const m = this.mods;
     const hSpeed = Math.hypot(this.vel.x, this.vel.z);
-    const angle = Math.atan2(-this.vel.y, Math.max(0.001, hSpeed));
-    const flat = this.rock.flat;
+    const angle = entryAngle(this.vel);
+    // Polished rides like a flatter stone than the one you actually carved
+    const flat = clamp01(this.rock.flat + m.flatAdd);
     const heft = this.rock.heft;
 
-    // splash lob: detonate on contact
+    // A splash lob is thrown to detonate rather than to skip, so it comes down
+    // flat on purpose whatever angle it arrives at — that is what makes it a
+    // placement shot: the ledge and the pocket behind a spire are targets you
+    // can drop onto, and a rival floating on the spot wears the splash.
     if (this.lastThrowMode === "splash") {
-      this._emit("blast", { at: this.pos.clone() });
-      let victims = 0;
-      if (ctx.others) {
-        for (const o of ctx.others) {
-          if (o === this || o.finished) continue;
-          if ((o.state === "resting" || o.state === "beached") && this.pos.distanceTo(o.pos) < BLAST_R) {
-            this._knockRival(o, ctx);
-            victims++;
-          }
-        }
-      }
-      // your stone settles where it detonated (lobs never sink you)
-      this.pos.y = waterY + 0.06;
-      this.vel.set(0, 0, 0);
-      this.state = "resting";
-      this._emit("settle", { at: this.pos.clone(), victims });
-      this._checkFlag(ctx, true);
+      this._lobImpact(ctx, waterY);
       return;
     }
 
-    const critAngle = 0.30 + flat * 0.30; // ~17°..34°
-    const minSkipSpeed = 5.6 - flat * 1.8;
-    // A throw aimed up over PLOP_ELEV was never going to skip and you knew it:
-    // it comes down flat, on purpose, so it lands where you put it instead of
-    // glugging under. That is what makes a high lob a real shot rather than a
-    // misjudged skipper — the ledge and the pocket behind a spire become
-    // targets you can just drop onto.
-    const lofted = this.lastThrowElev > PLOP_ELEV;
+    const critAngle = 0.30 + flat * 0.30; // ~17°..34°: flattest stones skip steepest
+    const minSkipSpeed = (5.6 - flat * 1.8) * m.minSkipMul;
+    const steep = steepness(angle, critAngle);
 
-    if (!lofted && angle < critAngle && hSpeed > minSkipSpeed) {
-      // SKIP — reflect with restitution, bleed horizontal speed
-      this.skips++;
-      this.bestCombo = Math.max(this.bestCombo, this.skips);
-      const rest = 0.5 + flat * 0.22;
-      this.vel.y = Math.max(-this.vel.y * rest, 1.15 + hSpeed * 0.045);
-      const keep = 0.845 + heft * 0.05 - (angle / critAngle) * 0.05;
-      this.vel.x *= keep;
-      this.vel.z *= keep;
-      this.pos.y = waterY + 0.19;
-      this.rock.kickEyes(0.8);
-      this.rock.squashKick?.(0.8 + Math.min(0.6, hSpeed / 30));
-      this.tapeSkips.push(this.tape.length - 1);
-      this._emit("skip", { at: this.pos.clone(), n: this.skips, speed: hSpeed });
-      this._checkFlag(ctx, false);
-    } else if (lofted || (hSpeed <= Math.max(2.6, minSkipSpeed * 0.75) && angle < 0.9)) {
-      // ran out of steam, or came down flat off a lob — settle and float
-      this.pos.y = waterY + 0.06;
-      this.vel.set(0, 0, 0);
-      this.state = "resting";
-      this.rock.squashKick?.(0.45);
-      this._emit("settle", { at: this.pos.clone() });
-      this._checkFlag(ctx, true);
+    // Coming in perpendicular: the stone punches through the surface instead of
+    // riding along it, and nothing about the stone or what is bolted to it
+    // changes that. Aim it at the sky and this is the shot you get.
+    if (angle >= PERP_ANGLE) {
+      this._beginSink(steep);
+      return;
+    }
+
+    if (angle < critAngle && hSpeed > minSkipSpeed) {
+      if (hSpeed < 5.6 - flat * 1.8) this._proc("lowrider"); // only Low Rider gets a hop here
+      this._skipOff(ctx, waterY, hSpeed, angle, critAngle, flat, heft);
+    } else if (hSpeed <= Math.max(2.6, minSkipSpeed * 0.75) && angle < SETTLE_ANGLE) {
+      // out of steam and barely tipped over — it just lies down on the water
+      this._settleOn(ctx, waterY);
+    } else if (Math.random() < m.luckySkip) {
+      // Skimmer's Luck: an entry that had no business skipping, skipping
+      this._proc("skimluck");
+      this._skipOff(ctx, waterY, hSpeed, angle, critAngle, flat, heft);
+    } else if (Math.random() < m.buoyant) {
+      // Corkstone: it simply declines to go under
+      this._proc("corkstone");
+      this._settleOn(ctx, waterY);
     } else {
       // too steep, too heavy — GLUB
-      this.state = "sinking";
-      this.sinkT = 0;
-      this.vel.multiplyScalar(0.2);
-      this.vel.y = -1;
-      this._emit("sink", { at: this.pos.clone(), knocked: false });
+      this._beginSink(steep);
     }
+  }
+
+  /**
+   * GLUB. `steep` is how perpendicular the entry was (0..1) and it sets both the
+   * plunge and how long the stone is down there: a steep one goes in nose-first
+   * and is back in your hand sooner than a shallow glug that wallows under.
+   */
+  _beginSink(steep, knocked = false) {
+    this.state = "sinking";
+    this.sinkT = 0;
+    this.sinkSteep = steep;
+    this.sinkDelay = SINK_TIME_SHALLOW + (SINK_TIME_STEEP - SINK_TIME_SHALLOW) * steep;
+    this.vel.multiplyScalar(0.2);
+    this.vel.y = -1 - steep * 2.5;
+    this._emit("sink", { at: this.pos.clone(), knocked, steep });
+  }
+
+  /** one hop: reflect with restitution, bleed horizontal speed */
+  _skipOff(ctx, waterY, hSpeed, angle, critAngle, flat, heft) {
+    const m = this.mods;
+    this.skips++;
+    this.bestCombo = Math.max(this.bestCombo, this.skips);
+    const rest = 0.5 + flat * 0.22 + m.restAdd;
+    this.vel.y = Math.max(-this.vel.y * rest, 1.15 + hSpeed * 0.045);
+    let keep = 0.845 + heft * 0.05 - (angle / critAngle) * 0.05 + m.keepAdd;
+    if (this.skips >= m.fireAt) keep += m.fireKeep; // burning stones hold their pace
+    if (m.chainBoost > 0 && this.skips % 3 === 0) {
+      keep += m.chainBoost;
+      this._proc("chainreaction");
+    }
+    this.vel.x *= keep;
+    this.vel.z *= keep;
+    this.pos.y = waterY + 0.19;
+    this.rock.kickEyes(0.8);
+    this.rock.squashKick?.(0.8 + Math.min(0.6, hSpeed / 30));
+    this.tapeSkips.push(this.tape.length - 1);
+    this._emit("skip", { at: this.pos.clone(), n: this.skips, speed: hSpeed });
+    this._checkFlag(ctx, false);
+  }
+
+  /** ran out of steam — float where it landed */
+  _settleOn(ctx, waterY) {
+    this.pos.y = waterY + 0.06;
+    this.vel.set(0, 0, 0);
+    this.state = "resting";
+    this.rock.squashKick?.(0.45);
+    this._emit("settle", { at: this.pos.clone() });
+    this._checkFlag(ctx, true);
+  }
+
+  /** a lob coming down flat: detonate on the spot, then float in the crater */
+  _lobImpact(ctx, waterY) {
+    const m = this.mods;
+    // who is standing in it, before the juice fires — a lob that caught nobody
+    // is just a placement shot and shouldn't hit like a bomb
+    const caught = [];
+    if (ctx.others) {
+      for (const o of ctx.others) {
+        if (o === this || o.finished) continue;
+        if ((o.state === "resting" || o.state === "beached") && this.pos.distanceTo(o.pos) < m.blastR) caught.push(o);
+      }
+    }
+    const victims = caught.length;
+    this._emit("blast", { at: this.pos.clone(), victims });
+    for (const o of caught) this._knockRival(o, ctx);
+    // your stone settles where it detonated (lobs never sink you)
+    this.pos.y = waterY + 0.06;
+    this.vel.set(0, 0, 0);
+    this.state = "resting";
+    this.rock.squashKick?.(0.45);
+    // Grudge: a splash that actually caught someone costs you nothing
+    if (victims > 0 && m.refund) {
+      this.throws = Math.max(0, this.throws - 1);
+      this.totalThrows = Math.max(0, this.totalThrows - 1);
+      this._proc("grudge");
+    }
+    this._emit("settle", { at: this.pos.clone(), victims });
+    this._checkFlag(ctx, true);
   }
 
   _knockRival(victim, ctx) {
@@ -457,19 +577,26 @@ export class Skimmer {
       this._emit("splashHit", { victim, at: victim.pos.clone() });
       return;
     }
-    victim.applyKnock(this.pos);
+    victim.applyKnock(this.pos, this.mods.knockMul);
     this._emit("splashHit", { victim, at: victim.pos.clone() });
   }
 
   /** get punted by a splash blast (local or via network) */
-  applyKnock(fromPos) {
+  applyKnock(fromPos, force = 1) {
     if (this.state === "sinking" || this.state === "fishing") return;
     if (this.onStartBridge) return; // immune while parked on the starting bridge
+    // Bulwark eats the first one each hole and the stone doesn't even wobble
+    if (this.shieldsLeft > 0) {
+      this.shieldsLeft--;
+      this.rock.kickEyes(1.5);
+      this._proc("bulwark");
+      return;
+    }
     _tmp.subVectors(this.pos, fromPos);
     _tmp.y = 0;
     if (_tmp.lengthSq() < 0.01) _tmp.set(1, 0, 0);
     _tmp.normalize();
-    this.vel.set(_tmp.x * 6, 4.5, _tmp.z * 6);
+    this.vel.set(_tmp.x * 6 * force, 4.5, _tmp.z * 6 * force);
     this.pos.y += 0.3;
     this.restY = 0.06; // blown clean off the buoy, if we were on one
     this.state = "flying"; // brief tumble...
@@ -491,7 +618,9 @@ export class Skimmer {
     if (this.finished || !ctx.flagPos) return;
     const dx = this.pos.x - ctx.flagPos.x, dz = this.pos.z - ctx.flagPos.z;
     const d = Math.hypot(dx, dz);
-    if (d >= ctx.captureR) return;
+    const captureR = ctx.captureR * this.mods.captureMul; // Lodestone reaches further
+    if (d >= captureR) return;
+    if (d >= ctx.captureR) this._proc("lodestone"); // outside the visible swirl: that was the magnet
 
     this.finished = true;
     this.vel.set(0, 0, 0);
@@ -517,11 +646,9 @@ const origWaterContact = Skimmer.prototype._waterContact;
 Skimmer.prototype._waterContact = function (ctx, waterY) {
   if (this._forceSink) {
     this._forceSink = false;
-    this.state = "sinking";
-    this.sinkT = 0;
-    this.vel.multiplyScalar(0.2);
-    this.vel.y = -1;
-    this._emit("sink", { at: this.pos.clone(), knocked: true });
+    // a punted stone tumbles down however it was thrown off the surface, so the
+    // angle it comes back at still decides how long it is under
+    this._beginSink(steepness(entryAngle(this.vel), 0.30), true);
     return;
   }
   origWaterContact.call(this, ctx, waterY);
@@ -531,18 +658,18 @@ Skimmer.prototype._waterContact = function (ctx, waterY) {
  * Dry-run a throw with the same maths for the aim preview.
  * Returns { points: Vector3[], skips: Vector3[], end: 'rest'|'sink'|'flying' }.
  */
-export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed, maxT = 6, islands = null, rocks = null, aimElev = null) {
+export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed, maxT = 6, islands = null, rocks = null, aimElev = null, mods = DEFAULT_MODS) {
   const s = {
     pos: startPos.clone(),
     vel: new THREE.Vector3(),
   };
   const elev = launchElev(power, mode, aimElev);
-  const lofted = elev > PLOP_ELEV;
-  const speed = MAX_SPEED * (0.28 + 0.72 * power) * (mode === "skip" ? 1 : 0.68);
+  const floor = mods.powerFloor;
+  const speed = MAX_SPEED * (floor + (1 - floor) * power) * (mode === "skip" ? 1 : 0.68) * mods.speedMul;
   s.vel.set(dirXZ.x * Math.cos(elev) * speed, Math.sin(elev) * speed, dirXZ.z * Math.cos(elev) * speed);
   s.pos.y = Math.max(s.pos.y, WATER_Y + 0.5); // match throwRock: hilltops launch from up there
 
-  const flat = rock.flat, heft = rock.heft;
+  const flat = clamp01(rock.flat + mods.flatAdd), heft = rock.heft;
   const points = [];
   const skips = [];
   let end = "flying";
@@ -561,15 +688,15 @@ export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed
         s.pos.z = o.z + nz * o.r;
         const dot = s.vel.x * nx + s.vel.z * nz;
         if (dot < 0) { s.vel.x -= 2 * dot * nx; s.vel.z -= 2 * dot * nz; }
-        s.vel.x *= 0.4; s.vel.z *= 0.4;
-        s.vel.y = Math.min(s.vel.y * 0.4, 1.5);
+        s.vel.x *= mods.clonkKeep; s.vel.z *= mods.clonkKeep;
+        s.vel.y = Math.min(s.vel.y * 0.4, mods.clonkChain ? 3 : 1.5);
         skips.push(s.pos.clone());
       }
     }
     if (islands) {
       let hitIsl = false;
       for (const isl of islands) {
-        if (Math.hypot(s.pos.x - isl.x, s.pos.z - isl.z) < isl.r * 0.85 && s.pos.y <= 0.55 && s.vel.y < 0) {
+        if (Math.hypot(s.pos.x - isl.x, s.pos.z - isl.z) < isl.r * mods.islandR && s.pos.y <= 0.55 && s.vel.y < 0) {
           hitIsl = true;
           break;
         }
@@ -584,20 +711,28 @@ export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed
     const wy = WATER_Y + water.heightAt(s.pos.x, s.pos.z, elapsed);
     if (s.pos.y <= wy + 0.18 && s.vel.y < 0) {
       const hSpeed = Math.hypot(s.vel.x, s.vel.z);
-      const angle = Math.atan2(-s.vel.y, Math.max(0.001, hSpeed));
-      if (mode === "splash") { end = "blast"; skips.push(s.pos.clone()); break; }
+      const angle = entryAngle(s.vel);
+      // a splash lob lands flat and detonates there — same call _waterContact makes
+      if (mode === "splash") { end = "blast"; points.push(s.pos.clone()); skips.push(s.pos.clone()); break; }
       const critAngle = 0.30 + flat * 0.30;
-      const minSkipSpeed = 5.6 - flat * 1.8;
-      if (!lofted && angle < critAngle && hSpeed > minSkipSpeed) {
+      const minSkipSpeed = (5.6 - flat * 1.8) * mods.minSkipMul;
+      if (angle >= PERP_ANGLE) {
+        end = "sink";
+        points.push(s.pos.clone());
+        break;
+      }
+      if (angle < critAngle && hSpeed > minSkipSpeed) {
         skipCount++;
         skips.push(s.pos.clone());
-        const rest = 0.5 + flat * 0.22;
+        const rest = 0.5 + flat * 0.22 + mods.restAdd;
         s.vel.y = Math.max(-s.vel.y * rest, 1.15 + hSpeed * 0.045);
-        const keep = 0.845 + heft * 0.05 - (angle / critAngle) * 0.05;
+        let keep = 0.845 + heft * 0.05 - (angle / critAngle) * 0.05 + mods.keepAdd;
+        if (skipCount >= mods.fireAt) keep += mods.fireKeep;
+        if (mods.chainBoost > 0 && skipCount % 3 === 0) keep += mods.chainBoost;
         s.vel.x *= keep; s.vel.z *= keep;
         s.pos.y = wy + 0.19;
         if (skipCount > 14) { end = "rest"; break; }
-      } else if (lofted || (hSpeed <= Math.max(2.6, minSkipSpeed * 0.75) && angle < 0.9)) {
+      } else if (hSpeed <= Math.max(2.6, minSkipSpeed * 0.75) && angle < SETTLE_ANGLE) {
         end = "rest";
         points.push(s.pos.clone());
         break;

@@ -1,0 +1,147 @@
+#!/usr/bin/env node
+/**
+ * BAKE THE FISH MODELS — assets/models/fish0*_shade.fbx -> src/fishdata.js
+ *
+ *   node scripts/bake-fish.mjs
+ *
+ * The game ships no runtime-fetched assets (see scripts/build-playable.mjs), so
+ * the sculpted fish can't be loaded with FBXLoader at boot: that would add the
+ * loader to the bundle, an async load, and a file the playable ad can't embed.
+ * Instead this offline step turns each FBX into plain arrays that live in the
+ * bundle and rebuild into a BufferGeometry instantly (src/fish.js).
+ *
+ * What it does per model:
+ *  - flattens the FBX's 100+ per-material draw groups into ONE non-indexed
+ *    geometry, with each material's colour kept as a per-triangle palette index
+ *    (4 colours per fish: body, belly, fins, eyes) — one draw call, no textures
+ *  - rotates the model out of its authored axes (nose +Y, dorsal +Z) into the
+ *    game's fish convention: nose +X, up +Y, lateral +Z
+ *  - centres it on its bounding box and normalises it to unit length along X,
+ *    so src/fish.js sizes a fish purely by mesh.scale and the wave shader's
+ *    head-to-tail ramp is the same expression for every model
+ *  - drops the normals: the fish are flat-shaded like the rest of the game, and
+ *    the wave in the vertex shader would invalidate authored normals anyway
+ *    (flat shading derives them per-face in the fragment stage, post-displacement)
+ *
+ * Positions are quantised to int16 in units of 1/POS_SCALE and base64'd, which
+ * is a third of the source size of the equivalent JSON number array.
+ */
+import * as THREE from "three";
+import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const MODELS = ["fish01_shade", "fish02_shade", "fish03_shade"];
+const POS_SCALE = 16384; // int16 quantisation: ~6e-5 of a body length
+
+// FBXLoader reaches for a couple of browser globals while parsing
+globalThis.self ??= globalThis;
+
+const loader = new FBXLoader();
+
+/** the single skinless mesh each of these files contains */
+function meshOf(group) {
+  let found = null;
+  group.traverse((o) => {
+    if (o.isMesh && !found) found = o;
+  });
+  if (!found) throw new Error("no mesh in FBX");
+  return found;
+}
+
+function bake(name) {
+  const buf = fs.readFileSync(path.join(root, "assets/models", `${name}.fbx`));
+  const group = loader.parse(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), "");
+  const mesh = meshOf(group);
+  mesh.updateWorldMatrix(true, false);
+
+  const geo = mesh.geometry.clone().applyMatrix4(mesh.matrixWorld);
+  const src = geo.attributes.position;
+  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  const triCount = src.count / 3;
+  if (triCount % 1) throw new Error(`${name}: not triangulated`);
+
+  // per-triangle material, read off the draw groups (FBX writes one group per
+  // run of faces sharing a material, hence the hundreds of them)
+  const tri = new Uint8Array(triCount);
+  for (const g of geo.groups) {
+    for (let i = g.start; i < g.start + g.count; i += 3) tri[i / 3] = g.materialIndex;
+  }
+
+  // authored axes -> game axes: nose (+Y) becomes +X, dorsal (+Z) becomes +Y,
+  // lateral (X) becomes +Z. A cyclic swap, so winding order survives untouched.
+  const pos = new Float32Array(src.count * 3);
+  for (let i = 0; i < src.count; i++) {
+    pos[i * 3] = src.getY(i);
+    pos[i * 3 + 1] = src.getZ(i);
+    pos[i * 3 + 2] = src.getX(i);
+  }
+
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < pos.length; i++) {
+    const k = i % 3;
+    if (pos[i] < min[k]) min[k] = pos[i];
+    if (pos[i] > max[k]) max[k] = pos[i];
+  }
+  const mid = min.map((v, k) => (v + max[k]) / 2);
+  const scale = 1 / (max[0] - min[0]); // unit nose-to-tail
+
+  const quant = new Int16Array(pos.length);
+  for (let i = 0; i < pos.length; i++) {
+    const v = (pos[i] - mid[i % 3]) * scale;
+    quant[i] = Math.round(THREE.MathUtils.clamp(v, -2, 2) * POS_SCALE);
+  }
+
+  const palette = mats.map((m) => `0x${m.color.getHexString()}`);
+  const size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]].map((v) => v * scale);
+  return {
+    name: mesh.name || name,
+    palette,
+    tris: triCount,
+    // proportions after normalising, for the comment only
+    size,
+    pos: Buffer.from(quant.buffer).toString("base64"),
+    tri: Buffer.from(tri.buffer).toString("base64"),
+  };
+}
+
+const baked = MODELS.map(bake);
+
+const body = baked
+  .map(
+    (b) => `  {
+    name: "${b.name}",
+    // ${b.tris} triangles, ${b.size.map((v) => v.toFixed(2)).join(" x ")} (length x height x thickness)
+    palette: [${b.palette.join(", ")}],
+    pos: "${b.pos}",
+    tri: "${b.tri}",
+  },`
+  )
+  .join("\n");
+
+const out = `/**
+ * GENERATED by scripts/bake-fish.mjs from assets/models/fish0*_shade.fbx.
+ * Do not edit by hand — re-run the script instead.
+ *
+ * Each entry is one flat-shaded fish, non-indexed and material-free: \`pos\` is a
+ * base64 int16 vertex stream in units of 1/POS_SCALE, normalised to unit length
+ * with the nose at +X and the back at +Y, and \`tri\` is one \`palette\` index per
+ * triangle. src/fish.js expands both into a BufferGeometry with vertex colours.
+ */
+export const POS_SCALE = ${POS_SCALE};
+
+export const FISH_MODELS = [
+${body}
+];
+`;
+
+const dest = path.join(root, "src/fishdata.js");
+fs.writeFileSync(dest, out);
+const kb = (n) => `${(n / 1024).toFixed(1)} kB`;
+console.log(`wrote src/fishdata.js (${kb(out.length)})`);
+for (const b of baked) {
+  console.log(`  ${b.name.padEnd(8)} ${String(b.tris).padStart(4)} tris  palette ${b.palette.join(" ")}`);
+}

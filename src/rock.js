@@ -10,12 +10,16 @@
  * the drill bites deeper on its own as the pit floor recedes, meets the far
  * side, and opens a tunnel you can see daylight through — all without the
  * surface ever tearing, because a marching-cubes shell is closed by
- * construction.
+ * construction. The stone packs tighter toward its middle, so the same drill
+ * takes longer and longer the further in it goes, and any bite that would snap
+ * the stone in two is refused outright — a flood fill decides, and the neck
+ * holding the halves together is the one thing the drill can't touch.
  */
 import * as THREE from "three";
 import { Spring } from "./juice.js";
 import { FlatEyes } from "./flateyes.js";
 import { marchCubes } from "./marchingcubes.js";
+import { makeHat } from "./cosmetics.js";
 
 export const ROCK_COLORS = [
   "#8f9aa3", // river grey
@@ -50,6 +54,9 @@ const FLAT_SCALE = 0.16;  // surface wobble across the belly that reads as rough
 const HOLLOW_FULL = 0.4;  // volume you must remove for a stone to read as gutted
 const MIN_VOLUME = 0.35;  // the drill stops here: bore all the holes you like,
                           // but you can't grind the stone out of existence
+const CORE_HARD = 6;      // the dead centre grinds this many times slower than the
+                          // skin, cubed on the way in so only the last of it is a slog
+const CORE_DARK = 0.07;   // how much of the paint job survives down in the dense middle
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
@@ -121,7 +128,20 @@ const _localRay = new THREE.Ray();
 const _span = [0, 0];
 const _us = new Float32Array(3);
 const _vs = new Float32Array(3);
-const _carved = { at: new THREE.Vector3(), hit: false, moved: 0, punched: false };
+const _carved = {
+  at: new THREE.Vector3(), hit: false, moved: 0, punched: false, hard: 0, blocked: false,
+};
+
+// Dab and flood-fill scratch. A bite is taken, judged and kept or put back
+// inside the one call, so a single set of buffers serves every stone on the lake.
+// `_undo` is what the last dab changed and what those samples held before it,
+// and `_cutAir` says whether any of them went from stone to air — the only way a
+// bite can have broken anything.
+let _undoAt = new Int32Array(0), _undoWas = new Float32Array(0);
+let _undoN = 0, _cutAir = false;
+// The flood fill stamps samples with a rising number instead of clearing a
+// visited buffer it would otherwise have to wipe on every single bite.
+let _seen = new Int32Array(0), _queue = new Int32Array(0), _stamp = 0;
 
 /** clip a ray to an axis-aligned box, into `_span`; false if it misses */
 function raySpan(o, d, hx, hy) {
@@ -274,9 +294,10 @@ export function drawRockPattern(ctx, pattern, strength = 0.88) {
 
 // ------------------------------------------------------------------ the rock
 export class Rock {
-  constructor({ seed = 1, lumpAmp = 0.22, thickness = 0.5, size = 0.55, color = ROCK_COLORS[0], pattern = "plain", expression = "neutral" } = {}) {
+  constructor({ seed = 1, lumpAmp = 0.22, thickness = 0.5, size = 0.55, color = ROCK_COLORS[0], pattern = "plain", expression = "neutral", name = null } = {}) {
     this.seed = seed;
     const rand = rng(seed * 7919 + 13);
+    this.name = name; // christened by the player when it comes off the paint booth
     this.size = size;
     this.baseThickness = thickness;
     this.color = color;
@@ -310,6 +331,7 @@ export class Rock {
     this.field = new Float32Array(nx * ny * nx);
     this.dabs = []; // the carve history: all a peer needs to rebuild this stone
     this._holed = false;
+    this._blocked = false; // the last bite was refused to keep the stone whole
     this._tops = new Float32Array(nx * nx);
     this._bots = new Float32Array(nx * nx);
     this._colSolid = new Uint8Array(nx * nx);
@@ -346,6 +368,7 @@ export class Rock {
       flatShading: true,
       roughness: 0.8,
       side: THREE.DoubleSide, // you can see the far wall through a tunnel
+      vertexColors: true,     // depth tint: the paint darkens as a bore goes in
     });
     this.mesh = new THREE.Mesh(geo, this.mat);
     this.mesh.scale.setScalar(size); // the field is unit-sized; the mesh isn't
@@ -354,6 +377,9 @@ export class Rock {
 
     // squash & stretch on impacts — kicked below 1, springs back with overshoot
     this.squash = new Spring(1, 240, 11);
+
+    this.hat = null;
+    this._hatId = "none";
 
     this._buildEyes();
     this.rebuild();
@@ -405,6 +431,14 @@ export class Rock {
     this._holed = false;
   }
 
+  /** How tightly packed the stone is at a local point: 0 out at the skin, 1 at
+   *  the dead centre. The shells are the stone's own flattened ellipsoids, so
+   *  "deep in" means the same thing on a thin pebble as on a fat one. */
+  density(x, y, z) {
+    const t = this.baseThickness;
+    return clamp01(1 - Math.sqrt(x * x + z * z + (y * y) / (t * t)));
+  }
+
   /** trilinear read of the field at a local point; anything off-grid is air */
   sampleAt(x, y, z) {
     const { nx, ny, nz, hx, hy, dx, dy, dz } = this.grid;
@@ -437,7 +471,9 @@ export class Rock {
     return -1;
   }
 
-  /** bite a soft-edged sphere out of the field; returns the volume it took */
+  /** Bite a soft-edged sphere out of the field; returns the volume it took.
+   *  Every sample it changes goes into the undo scratch on the way past, so the
+   *  bite can be put back if it turns out to have broken the stone in two. */
   _dab(cx, cy, cz, radius, amount) {
     const { nx, ny, nz, hx, hy, dx, dy, dz } = this.grid;
     const f = this.field;
@@ -448,29 +484,94 @@ export class Rock {
     const iz0 = Math.max(0, Math.ceil((cz - radius + hx) / dz));
     const iz1 = Math.min(nz - 1, Math.floor((cz + radius + hx) / dz));
     const r2 = radius * radius;
+    const box = (ix1 - ix0 + 1) * (iy1 - iy0 + 1) * (iz1 - iz0 + 1);
+    if (_undoAt.length < box) {
+      _undoAt = new Int32Array(box);
+      _undoWas = new Float32Array(box);
+    }
+    _undoN = 0;
+    _cutAir = false;
     let took = 0;
     for (let iy = iy0; iy <= iy1; iy++) {
-      const oy = -hy + iy * dy - cy;
+      const py = -hy + iy * dy;
+      const oy = py - cy;
       for (let iz = iz0; iz <= iz1; iz++) {
-        const oz = -hx + iz * dz - cz;
+        const pz = -hx + iz * dz;
+        const oz = pz - cz;
         const row = iz * nx + iy * nx * nz;
         const offRow = oy * oy + oz * oz;
         if (offRow >= r2) continue;
         for (let ix = ix0; ix <= ix1; ix++) {
-          const ox = -hx + ix * dx - cx;
+          const px = -hx + ix * dx;
+          const ox = px - cx;
           const d2 = offRow + ox * ox;
           if (d2 >= r2) continue;
-          // near-flat across the bit, feathered at the rim, so the drill cuts a
-          // clean bore instead of a needle prick
-          const cut = amount * (1 - d2 / r2);
+          // Near-flat across the bit, feathered at the rim, so the drill cuts a
+          // clean bore instead of a needle prick — then divided down by how
+          // dense the stone is here, which is what makes the middle a slog.
+          const dens = this.density(px, py, pz);
+          const cut = (amount * (1 - d2 / r2)) / (1 + (CORE_HARD - 1) * dens * dens * dens);
           const j = row + ix;
           const v = f[j];
-          if (v > 0) took += Math.min(v, cut);
-          f[j] = Math.max(FIELD_FLOOR, v - cut);
+          const nv = Math.max(FIELD_FLOOR, v - cut);
+          if (nv === v) continue; // already eaten down to the floor
+          _undoAt[_undoN] = j;
+          _undoWas[_undoN++] = v;
+          if (v > 0) {
+            took += v - Math.max(nv, 0);
+            if (nv <= 0) _cutAir = true;
+          }
+          f[j] = nv;
         }
       }
     }
     return took * dx * dy * dz;
+  }
+
+  /** put the last dab back, sample for sample */
+  _undoDab() {
+    const f = this.field;
+    for (let i = 0; i < _undoN; i++) f[_undoAt[i]] = _undoWas[i];
+    _undoN = 0;
+  }
+
+  /** Is every scrap of stone still joined to every other one? A 6-connected
+   *  flood fill from the first solid sample: if it can't reach them all, the
+   *  field has come apart into pieces that only look like one stone. */
+  _connected() {
+    const { nx, ny, nz } = this.grid;
+    const f = this.field;
+    const n = nx * ny * nz;
+    const sz = nx, sy = nx * nz;
+    if (_seen.length < n) {
+      _seen = new Int32Array(n);
+      _queue = new Int32Array(n);
+    }
+    let total = 0, seed = -1;
+    for (let j = 0; j < n; j++) {
+      if (f[j] <= 0) continue;
+      total++;
+      if (seed < 0) seed = j;
+    }
+    if (total === 0) return true;
+
+    const mark = ++_stamp;
+    let head = 0, tail = 0;
+    _seen[seed] = mark;
+    _queue[tail++] = seed;
+    while (head < tail) {
+      const j = _queue[head++];
+      const ix = j % nx;
+      const iy = (j / sy) | 0;
+      const iz = ((j - ix - iy * sy) / sz) | 0;
+      if (ix > 0 && f[j - 1] > 0 && _seen[j - 1] !== mark) { _seen[j - 1] = mark; _queue[tail++] = j - 1; }
+      if (ix < nx - 1 && f[j + 1] > 0 && _seen[j + 1] !== mark) { _seen[j + 1] = mark; _queue[tail++] = j + 1; }
+      if (iz > 0 && f[j - sz] > 0 && _seen[j - sz] !== mark) { _seen[j - sz] = mark; _queue[tail++] = j - sz; }
+      if (iz < nz - 1 && f[j + sz] > 0 && _seen[j + sz] !== mark) { _seen[j + sz] = mark; _queue[tail++] = j + sz; }
+      if (iy > 0 && f[j - sy] > 0 && _seen[j - sy] !== mark) { _seen[j - sy] = mark; _queue[tail++] = j - sy; }
+      if (iy < ny - 1 && f[j + sy] > 0 && _seen[j + sy] !== mark) { _seen[j + sy] = mark; _queue[tail++] = j + sy; }
+    }
+    return tail === total;
   }
 
   /** Take a bite and log it. The field is only ever subtracted from, so bites
@@ -478,7 +579,13 @@ export class Rock {
    *  a single deepening entry. Only what survives the log's rounding is
    *  actually eaten, so the stone on screen never drifts from the stone the
    *  log describes; `deep` keeps the unrounded running total so a slow trickle
-   *  of tiny frames still adds up instead of rounding away to nothing. */
+   *  of tiny frames still adds up instead of rounding away to nothing.
+   *
+   *  The one bit of stone the drill will not cut is whatever is holding the rest
+   *  of it together: a bite that would snap the last thread between two halves
+   *  is put straight back, field and log entry both, and the neck survives at
+   *  whatever thickness it had. Nothing is logged until it has stuck, so a peer
+   *  replaying the log never has to know a bite was refused. */
   _carveDab(cx, cy, cz, radius, amount) {
     const r = snapRadius(radius);
     const x = snapPos(cx), y = snapPos(cy), z = snapPos(cz);
@@ -491,15 +598,28 @@ export class Rock {
       entry = p;
       break;
     }
-    if (!entry) {
+    const fresh = !entry;
+    if (fresh) {
       entry = { x, y, z, r, a: 0, deep: 0 };
       d.push(entry);
     }
+    const wasDeep = entry.deep, was = entry.a;
     entry.deep = Math.min(DAB_MAX, entry.deep + amount);
-    const was = entry.a;
     entry.a = snapDepth(entry.deep);
     const bite = entry.a - was;
-    return bite > 0 ? this._dab(entry.x, entry.y, entry.z, entry.r, bite) : 0;
+    if (bite <= 0) return 0;
+    const took = this._dab(entry.x, entry.y, entry.z, entry.r, bite);
+    // Only a bite that turned stone to air can have broken anything, so the
+    // fill only runs on the frames where the drill actually cut through.
+    if (_cutAir && !this._connected()) {
+      this._undoDab();
+      entry.deep = wasDeep;
+      entry.a = was;
+      if (fresh) d.pop();
+      this._blocked = true;
+      return 0;
+    }
+    return took;
   }
 
   /**
@@ -512,13 +632,18 @@ export class Rock {
    * instead.
    *
    * Returns the world point worked (`hit` false if the ray missed the stone),
-   * the volume of stone taken, and whether this bite was the breakthrough.
+   * the volume of stone taken, how dense the stone is where the bit is sitting
+   * (`hard`), whether the bite was refused for holding the stone together
+   * (`blocked`), and whether this bite was the breakthrough.
    */
   carve(ray, radius = 0.36, amount = 0.3) {
     const g = this.grid;
     _carved.hit = false;
     _carved.moved = 0;
     _carved.punched = false;
+    _carved.hard = 0;
+    _carved.blocked = false;
+    this._blocked = false;
     if (this._volFrac <= MIN_VOLUME) return _carved;
 
     this.mesh.updateWorldMatrix(true, false);
@@ -537,6 +662,9 @@ export class Rock {
       cy = o.y + d.y * enter;
       cz = o.z + d.z * enter;
       _carved.moved = this._carveDab(cx, cy, cz, radius, amount);
+      // how much the stone is fighting back where the bit is sitting: it still
+      // goes all the way through, it just takes its time about it
+      _carved.hard = this.density(cx, cy, cz);
     } else if (this._holed) {
       // Nothing but air along a line that runs through the middle of the stone:
       // you are looking down a tunnel you already made. Ream it end to end so
@@ -559,6 +687,7 @@ export class Rock {
     }
 
     this.rebuild();
+    _carved.blocked = this._blocked;
     // daylight: the line that met stone a moment ago is clear all the way now
     if (enter >= 0 && this._firstStone(o, d, t0, t1, step) < 0) {
       _carved.punched = true;
@@ -631,18 +760,23 @@ export class Rock {
       // the surface outgrew its buffer (or this is the first build)
       this._uvs = new Float32Array((pos.length / 3) * 2);
       this._norms = new Float32Array(pos.length);
+      this._cols = new Float32Array(pos.length);
       this.geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
       this.geo.setAttribute("uv", new THREE.BufferAttribute(this._uvs, 2));
       this.geo.setAttribute("normal", new THREE.BufferAttribute(this._norms, 3));
+      this.geo.setAttribute("color", new THREE.BufferAttribute(this._cols, 3));
     }
     this._skinUVs(n);
     this._faceNormals(n);
+    this._densityTint(n);
     this.geo.setDrawRange(0, n);
     this.geo.attributes.position.needsUpdate = true;
     this.geo.attributes.uv.needsUpdate = true;
     this.geo.attributes.normal.needsUpdate = true;
+    this.geo.attributes.color.needsUpdate = true;
     this._measure();
     this._placeEyes();
+    this._placeHat();
   }
 
   /** Spherical UVs for the painted skin, laid down per triangle (the buffer is
@@ -675,6 +809,21 @@ export class Rock {
         uv[(t + k) * 2] = _us[k];
         uv[(t + k) * 2 + 1] = _vs[k];
       }
+    }
+  }
+
+  /** Tint every vertex by how dense the stone is where it sits: the paint job
+   *  full strength out at the skin, fading to near-black in the middle. A bore
+   *  then reads as going somewhere instead of showing the same paint all the
+   *  way in — and since it's the same reading the drill slows down on, the dark
+   *  stone is exactly the stone that's hard work. */
+  _densityTint(n) {
+    const p = this._mc.positions, c = this._cols;
+    for (let i = 0; i < n; i++) {
+      const j = i * 3;
+      const t = this.density(p[j], p[j + 1], p[j + 2]);
+      const shade = 1 - (1 - CORE_DARK) * t * t * (3 - 2 * t);
+      c[j] = shade; c[j + 1] = shade; c[j + 2] = shade;
     }
   }
 
@@ -850,6 +999,35 @@ export class Rock {
     this.group.add(this.eyes);
   }
 
+  // ---- hats (see cosmetics.js) ----
+  /**
+   * Wear a hat, or pass "none" to go bare. It parents to the same group the
+   * eyes do, so the squash, the spin and the tumble all carry it — and like the
+   * eyes it rides the stone's *birth* height, so grinding the top flat doesn't
+   * bury the crown you paid 900 shells for.
+   */
+  setHat(id) {
+    if (id === this._hatId) return;
+    this._hatId = id;
+    if (this.hat) {
+      this.group.remove(this.hat);
+      disposeTree(this.hat);
+      this.hat = null;
+    }
+    const hat = makeHat(id);
+    if (!hat) return;
+    this.hat = hat;
+    this.group.add(hat);
+    this._placeHat();
+  }
+
+  _placeHat() {
+    if (!this.hat) return;
+    // sit the brim just inside the crown of the stone so nothing floats
+    this.hat.scale.setScalar(this.size);
+    this.hat.position.set(0, (this.baseThickness + this.lumpAmp * 0.5) * this.size * 0.92, 0);
+  }
+
   _placeEyes() {
     // the face is a camera-facing billboard (orientation handled per-frame in
     // FlatEyes.update); here we just size it and sit it on the upper-front of
@@ -860,6 +1038,14 @@ export class Rock {
     const plane = this.eyes;
     plane.scale.setScalar(this.size * 1.45);
     plane.position.set(0.12 * this.size, up * 0.32, 0);
+    // the face is depth-tested in the world, so it needs the silhouette it has
+    // to sit in front of: the stone at its most swollen, lumps included
+    this.flatEyes.setHull(this._rMax * this.size, this._yMax * this.size, 0.04 * this.size);
+  }
+
+  /** what to call it: the name the player typed, or the one it was born with */
+  get label() {
+    return this.name || rockName(this.seed);
   }
 
   /** the face currently on screen */
@@ -916,10 +1102,39 @@ export class Rock {
     }
     this.flatEyes.update(dt, this._gaze || EYE_TARGET, EYE_QUAT);
 
+    // hats with moving parts: the propeller spins, the halo turns and hovers
+    if (this.hat) {
+      const ud = this.hat.userData;
+      if (ud.spinner) ud.spinner.rotation.y += (ud.spinRate ?? 1) * dt;
+      if (ud.bob) {
+        this._hatT = (this._hatT ?? 0) + dt;
+        ud.spinner.position.y = 0.5 + Math.sin(this._hatT * 1.8) * ud.bob;
+      }
+    }
+
     const sq = Math.max(0.45, Math.min(1.45, this.squash.update(dt)));
     const w = 1 + (1 - sq) * 0.55; // conserve apparent volume
     this.group.scale.set(w, sq, w);
   }
+
+  /** give the GPU its buffers back — for stones swapped off the shelf */
+  dispose() {
+    this.group.removeFromParent();
+    this.geo.dispose();
+    this.mat.dispose();
+    this.tex.dispose();
+    this.flatEyes.dispose();
+    if (this.hat) disposeTree(this.hat);
+  }
+}
+
+/** hand back every buffer under an accessory group */
+function disposeTree(obj) {
+  obj.traverse((o) => {
+    o.geometry?.dispose();
+    if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
+    else o.material?.dispose();
+  });
 }
 
 // ------------------------------------------------------------------ names

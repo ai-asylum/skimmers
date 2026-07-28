@@ -222,6 +222,12 @@ export class Audio {
     this._noise(0.09, { type: "bandpass", freq: 1300 + Math.random() * 900, q: 2.5, gain: 0.1, attack: 0.005 });
   }
 
+  /** the drill grinding into the dense heart of a stone: a hard bright ring */
+  coreClank() {
+    this._noise(0.04, { type: "highpass", freq: 4200, gain: 0.09, attack: 0.001 });
+    this._tone(1180 + Math.random() * 160, 0.1, { type: "square", gain: 0.05, slideTo: 900 });
+  }
+
   paintDab() {
     this._noise(0.07, { type: "bandpass", freq: 700, q: 1.5, gain: 0.08 });
     this._tone(500 + Math.random() * 300, 0.05, { type: "sine", gain: 0.05 });

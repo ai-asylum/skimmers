@@ -9,7 +9,10 @@ import * as THREE from "three";
 import { audio } from "./audio.js";
 import { lakeDepthAt, bedHeightAt, DIVE_MIN, WATER_Y } from "./water.js";
 import { terrainHeightAt } from "./terrain.js";
-import { els } from "./ui.js";
+import { makeLifebuoy } from "./lifebuoy.js";
+import { paintFloater } from "./cosmetics.js";
+import { DEFAULT_MODS } from "./upgrades.js";
+import { makeFish, updateFishWave, wave as fishWave } from "./fish.js";
 
 const ROCK_Y = 0.55; // local y of the rock on the bed
 export const HOOK_SPEED = 2.0;
@@ -24,29 +27,6 @@ const SIGHT_CLEARANCE = 0.6; // world units the sightline must clear the lake be
 
 const _tip = new THREE.Vector3();
 
-const FISH_COLORS = [0xffa63d, 0x37c8e0, 0xff5470, 0x9d7cf4, 0xffd24a, 0x6fe07a];
-
-function makeFish(color) {
-  const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color, flatShading: true });
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 6), mat);
-  body.scale.set(1.5, 0.85, 0.6);
-  g.add(body);
-  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.55, 4), mat);
-  tail.rotation.z = Math.PI / 2;
-  tail.position.x = -0.72;
-  tail.scale.z = 0.4;
-  g.add(tail);
-  const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
-  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 5), eyeMat);
-  eye.position.set(0.42, 0.12, 0.22);
-  g.add(eye);
-  const eye2 = eye.clone();
-  eye2.position.z = -0.22;
-  g.add(eye2);
-  return g;
-}
-
 export class Fishing {
   constructor(scene, particles, water) {
     this.scene = scene;
@@ -55,6 +35,11 @@ export class Fishing {
     this.active = false;
     this.onDone = null;
     this.rock = null;
+    this.mods = DEFAULT_MODS;
+    this.wave = fishWave; // the school's swim shader, live-tunable from the console
+
+    /** dress the lake buoy in a bought floater (cosmetics.js FLOATERS) */
+    this.setFloater = (id) => paintFloater(this.buoyRing, id);
 
     // chosen view: the diorama is yawed to face the camera, so its local x/y
     // plane (the whole 2D minigame) always reads flat on screen
@@ -70,20 +55,11 @@ export class Fishing {
     this.buoy = buoy;
     buoy.visible = false;
     scene.add(buoy);
-    const ringGrp = new THREE.Group();
-    ringGrp.rotation.x = Math.PI / 2; // lay the torus flat
+    // the lake buoy wears the same floater the player bought for the bench
+    this.buoyRing = makeLifebuoy();
+    const ringGrp = this.buoyRing.group;
     ringGrp.position.y = 0.12;
     buoy.add(ringGrp);
-    const ringMat = new THREE.MeshStandardMaterial({ color: 0xff5a3c, flatShading: true });
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.34, 10, 18), ringMat);
-    ringGrp.add(ring);
-    // classic lifebuoy patches, a slightly fatter tube so they sit proud
-    const patchMat = new THREE.MeshStandardMaterial({ color: 0xf4f0e6, flatShading: true });
-    for (let i = 0; i < 4; i++) {
-      const patch = new THREE.Mesh(new THREE.TorusGeometry(0.85, 0.36, 10, 4, Math.PI / 6), patchMat);
-      patch.rotation.z = i * (Math.PI / 2) - Math.PI / 12;
-      ringGrp.add(patch);
-    }
     // the line ties straight off the ring's bow edge
     this.lineAnchor = new THREE.Object3D();
     this.lineAnchor.position.set(0, 0.4, 0.8);
@@ -205,10 +181,12 @@ export class Fishing {
     this.hook.add(sinker);
     g.add(this.hook);
 
-    // fish school
+    // fish school — the three sculpted species (src/fish.js), twice over
     this.fish = [];
     for (let i = 0; i < 6; i++) {
-      const f = makeFish(FISH_COLORS[i % FISH_COLORS.length]);
+      const f = makeFish(i);
+      const len = 1.7 + Math.random() * 0.9; // the models are baked to unit length
+      f.scale.setScalar(len);
       g.add(f);
       this.fish.push({
         mesh: f,
@@ -216,6 +194,13 @@ export class Fishing {
         xr: 5.5 + Math.random() * 2.5,
         speed: (1.6 + Math.random() * 1.6) * (Math.random() < 0.5 ? 1 : -1),
         phase: Math.random() * 10,
+        // a few degrees off the flat side-on profile, so the sculpt reads as a
+        // solid and the sideways half of the shader's wave shows on screen
+        yaw: (0.2 + Math.random() * 0.22) * (Math.random() < 0.5 ? 1 : -1),
+        // hook clearance follows what's actually drawn, so the big ones are
+        // genuinely harder to thread than the little ones
+        hx: len * 0.42,
+        hy: len * 0.26,
         scare: 0,
       });
     }
@@ -227,10 +212,11 @@ export class Fishing {
   /** dive in: the diorama sits on the real lake bed under the sink spot, so
    *  bank-side dives are quick grabs and mid-channel sinks are a long, fishy
    *  descent */
-  start(spot, rock, onDone, blockers = []) {
+  start(spot, rock, onDone, blockers = [], mods = DEFAULT_MODS) {
     this.active = true;
     this.onDone = onDone;
     this.rock = rock;
+    this.mods = mods; // fishing upgrades: fewer fish, faster line, wider grab
     this.hits = 0;
     this.phase = "fall"; // fall -> drop -> reel
     spot = this._diveSpot(spot);
@@ -273,8 +259,10 @@ export class Fishing {
     this.swingVel = 0;
     this.prevHookX = 0;
 
-    // deeper water = more fish in the gauntlet, lanes squeezed to the depth
-    const active = Math.max(2, Math.min(this.fish.length, Math.round(this.depth / 2.2)));
+    // deeper water = more fish in the gauntlet, lanes squeezed to the depth.
+    // Fish Repellent thins the crowd; it can clear the water completely in the
+    // shallows, which is exactly what 190 shells ought to buy you.
+    const active = Math.max(0, Math.min(this.fish.length, Math.round(this.depth / 2.2) - this.mods.fishFewer));
     const laneLo = ROCK_Y + 1.15;
     const laneHi = Math.max(laneLo + 0.8, this.hookStart - 0.6);
     this.fish.forEach((f, i) => {
@@ -290,7 +278,6 @@ export class Fishing {
     });
 
     this.el.classList.remove("hidden");
-    els.throwUi.classList.add("hidden");
   }
 
   /** camera pose for main's "fishing" mode — aquarium side view, framed to depth */
@@ -406,7 +393,8 @@ export class Fishing {
       );
     }
 
-    // fish patrol their lanes
+    // fish patrol their lanes — the tail beat itself lives in the vertex shader
+    updateFishWave(elapsed);
     for (const f of this.fish) {
       const boost = 1 + f.scare * 2.5;
       f.scare = Math.max(0, f.scare - dt);
@@ -416,8 +404,10 @@ export class Fishing {
         f.speed *= -1;
       }
       f.mesh.position.y = f.y + Math.sin(elapsed * 2 + f.phase) * 0.22;
-      f.mesh.scale.x = f.speed > 0 ? 1 : -1;
-      f.mesh.rotation.z = Math.sin(elapsed * 6 + f.phase) * 0.08;
+      f.mesh.rotation.y = (f.speed > 0 ? 0 : Math.PI) + f.yaw;
+      // nose angles into the climb and fall of its own bob (z pitches the nose
+      // whichever way the fish is facing, so this needs no mirroring)
+      f.mesh.rotation.z = Math.cos(elapsed * 2 + f.phase) * 0.13;
     }
 
     // ---- intro: the stone rocks gently down to the bed, then the line drops in
@@ -477,7 +467,7 @@ export class Fishing {
       // steer + descend
       const targetX = (pointerX01 - 0.5) * 2 * STEER_RANGE * 0.55;
       this.hookX += (targetX - this.hookX) * Math.min(1, 9 * dt);
-      this.hookY -= HOOK_SPEED * dt;
+      this.hookY -= HOOK_SPEED * this.mods.hookSpeedMul * dt;
       if (this.hookY < this._tickY) {
         this._tickY = this.hookY - 0.5;
         audio.reelTick();
@@ -487,9 +477,9 @@ export class Fishing {
       for (const f of this.fish) {
         const dx = f.mesh.position.x - dispX;
         const dy = f.mesh.position.y - this.hookY;
-        if (Math.abs(dx) < 0.85 && Math.abs(dy) < 0.5) {
+        if (Math.abs(dx) < f.hx && Math.abs(dy) < f.hy) {
           this.hits++;
-          this.hookY = Math.min(this.hookStart, this.hookY + 2.7);
+          this.hookY = Math.min(this.hookStart, this.hookY + this.mods.fishBump);
           this._tickY = this.hookY;
           f.scare = 1.4;
           f.speed = Math.abs(f.speed) * Math.sign(dx || 1); // dart away from the hook
@@ -505,7 +495,7 @@ export class Fishing {
 
       // reached the rock?
       if (this.hookY <= ROCK_Y + 0.55) {
-        if (Math.abs(dispX) < 1.15) {
+        if (Math.abs(dispX) < this.mods.catchWidth) {
           this.phase = "reel";
           audio.catchRock();
           this.rock.kickEyes(2);
@@ -603,7 +593,6 @@ export class Fishing {
     this.active = false;
     this.group.visible = false;
     this.el.classList.add("hidden");
-    els.throwUi.classList.remove("hidden");
     // hand the rock back to the game (main repositions it via placeAt);
     // the buoy stays out — main parks it under the new lie
     this.onDone?.(clean, this.hits);
@@ -626,6 +615,5 @@ export class Fishing {
     this.group.visible = false;
     this.buoy.visible = false;
     this.el.classList.add("hidden");
-    els.throwUi.classList.remove("hidden");
   }
 }

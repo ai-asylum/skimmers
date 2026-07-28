@@ -7,7 +7,10 @@
  * pupils share one look vector so they stay parallel (never cross-eyed).
  *
  * A single plane carries both eyes. It is attached to the rock at a fixed local
- * pose, so it tumbles/spins with the stone (per design choice).
+ * pose and billboards to the camera each frame. It lives in the world like any
+ * other geometry — terrain, boats and rival stones hide it — with only its
+ * depth nudged out to the wearer's near silhouette so the stone it belongs to
+ * cannot swallow its own face (see uDepthLift / setHull).
  *
  * Where the pupils sit per expression lives in eyeconfig.js — the faces are
  * drawn at different heights in their cells, so each one needs its own socket.
@@ -149,10 +152,21 @@ function detectCell(g, w, h, out) {
 
 // ---- shader ----------------------------------------------------------------
 const VERT = /* glsl */`
+  uniform float uDepthLift;  // view-space units toward the camera, depth only
   varying vec2 vUv;
   void main() {
     vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vec4 clip = projectionMatrix * mv;
+    // The face is a billboard anchored inside the stone, so a plain depth test
+    // would bury it in solid rock. Keep the on-screen projection exactly as it
+    // is, but hand the depth buffer the value this fragment would have sitting
+    // uDepthLift closer to the camera — just outside the stone's own hull. That
+    // way the wearer never hides its own face, while anything else in the world
+    // in front of it still does.
+    vec4 lifted = projectionMatrix * vec4(mv.xy, mv.z + uDepthLift, mv.w);
+    float nz = lifted.w > 0.0001 ? lifted.z / lifted.w : clip.z / max(clip.w, 0.0001);
+    gl_Position = vec4(clip.xy, clamp(nz, -0.999, 1.0) * clip.w, clip.w);
   }
 `;
 
@@ -229,7 +243,7 @@ function makeMaterial() {
     fragmentShader: FRAG,
     transparent: true,
     depthWrite: false,
-    depthTest: false,     // billboard sticker face: always drawn over the stone
+    depthTest: true,      // the face lives in the world; see uDepthLift in VERT
     side: THREE.DoubleSide,
     uniforms: {
       uSheet: { value: assets.tex || placeholderTex() },
@@ -241,6 +255,7 @@ function makeMaterial() {
       uRadR: { value: DEFAULT_SOCK.rr },
       uAspect: { value: assets.aspect },
       uLook: { value: new THREE.Vector2(0, 0) },
+      uDepthLift: { value: 0 },
       uPupilFrac: { value: 0.46 },
       uFollow: { value: 1.0 },
       uFade: { value: 1.0 },
@@ -263,6 +278,8 @@ class Jig {
 }
 
 const _local = new THREE.Vector3();
+const _dir = new THREE.Vector3();
+const _scale = new THREE.Vector3();
 const _pq = new THREE.Quaternion();
 const _UP = new THREE.Vector3(0, 1, 0);
 
@@ -274,7 +291,8 @@ export class FlatEyes {
     this.plane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1 / (assets.aspect || 1)), this.mat);
     this.plane.userData.noCel = true;      // keep our raw shader out of the cel pass
     this.plane.userData._outline = true;   // and out of the inverted-hull outline pass
-    this.plane.renderOrder = 20;
+    this.plane.renderOrder = 2;            // after the lake, which writes no depth
+    this.hull = null;                      // the wearer's silhouette, see setHull
     this.jigX = new Jig();
     this.jigY = new Jig();
     this.gaze = new THREE.Vector2(0, 0); // smoothed, so the pupils slide between targets
@@ -315,6 +333,31 @@ export class FlatEyes {
     u.uRadR.value = s.rr;
   }
 
+  /**
+   * The ellipsoid the face has to climb out of to be seen: the wearer's
+   * silhouette in parent-local units (`r` horizontal, `y` vertical, plus a
+   * `margin` of clearance). Without it the face is depth-tested where it sits,
+   * which is inside the stone.
+   */
+  setHull(r, y, margin = 0) {
+    this.hull = r > 0 && y > 0 ? { r, y, margin } : null;
+  }
+
+  /** how far along `dir` (parent-local, unit) the face is from open air */
+  _hullExit(dir) {
+    const h = this.hull;
+    if (!h) return 0;
+    const p = this.plane.position;
+    const ir2 = 1 / (h.r * h.r), iy2 = 1 / (h.y * h.y);
+    const a = (dir.x * dir.x + dir.z * dir.z) * ir2 + dir.y * dir.y * iy2;
+    if (a < 1e-9) return h.margin;
+    const b = 2 * ((p.x * dir.x + p.z * dir.z) * ir2 + p.y * dir.y * iy2);
+    const c = (p.x * p.x + p.z * p.z) * ir2 + p.y * p.y * iy2 - 1;
+    const disc = b * b - 4 * a * c;
+    if (disc <= 0) return h.margin; // already outside, or grazing
+    return Math.max((-b + Math.sqrt(disc)) / (2 * a), 0) + h.margin;
+  }
+
   /** 0..1 whole-face opacity — the sticker sits over the middle of the stone,
    *  so it steps aside while the player is working that spot */
   setFade(v) {
@@ -340,6 +383,16 @@ export class FlatEyes {
     if (camQuat && plane.parent) {
       plane.parent.getWorldQuaternion(_pq);
       plane.quaternion.copy(_pq.invert()).multiply(camQuat);
+    }
+
+    // --- depth: the face reads at the stone's near silhouette instead of at
+    // its buried anchor. The billboard's own +z points at the camera, so that
+    // is the direction to escape the hull along. ---
+    if (this.hull && plane.parent) {
+      _dir.set(0, 0, 1).applyQuaternion(plane.quaternion);
+      plane.parent.getWorldScale(_scale);
+      const s = Math.max(_scale.x, _scale.y, _scale.z); // squash: lift a hair long
+      this.mat.uniforms.uDepthLift.value = this._hullExit(_dir) * s;
     }
 
     // --- pupils gaze at the target; with a billboard the parallax between the

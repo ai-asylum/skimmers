@@ -1,5 +1,7 @@
 // Boat contact check: stones that come DOWN onto a boat must land on deck and
-// ride it, while flat shots into the side must still BOING off the hull.
+// ride it, while flat shots into the side must still BOING off the hull. The
+// deck heights in src/boats.js are picked to keep that split, so this is the
+// test that catches a boat riding too low in the water.
 // Run with `node scripts/deck-landing-check.mjs`.
 import * as THREE from "three";
 import { Boats } from "../src/boats.js";
@@ -42,12 +44,15 @@ const expect = (label, got, want) => {
 
 // 1. straight drops from every height/speed, over the middle and the gunwales
 for (const b of boats.boats) {
-  const { len, wid } = b.dims;
+  const len = b.halfLen * 2;
+  const wid = b.beam;
+  const motor = b.spec.blocks?.[0];
   for (const h of [0.4, 2, 6, 15, 40]) {
     for (const vy of [0, -6, -20]) {
       for (const oz of [0, wid / 2 - 0.1, wid / 2 + 0.15]) {
         for (const ox of [0, -len / 2 + 0.3, len / 2 - 0.3]) {
-          if (b.type === "steam" && ox > 0.3 && ox < 1.5) continue; // smokestack, see 3.
+          // nothing to stand on atop the outboard's cowling, see 3.
+          if (motor && ox <= motor.x1 * b.spec.len) continue;
           // start clear of the tallest deck so the drop is a real fall onto it
           const p = b.group.localToWorld(new THREE.Vector3(ox, b.decks[0].y, oz));
           const hit = fly(new THREE.Vector3(p.x, p.y + h, p.z), new THREE.Vector3(0, vy, 0));
@@ -84,7 +89,7 @@ for (const b of boats.boats) {
   }
 }
 
-// 3. flat skimming shots into the flank, and the tug's smokestack, still boing
+// 3. flat skimming shots into the flank, and the outboard's motor, still boing
 for (const b of boats.boats) {
   for (const side of [1, -1]) {
     const from = b.group.localToWorld(new THREE.Vector3(0, 0.25, side * 7));
@@ -96,9 +101,12 @@ for (const b of boats.boats) {
   }
 }
 {
-  const tug = boats.boats.find((b) => b.type === "steam");
-  const p = tug.group.localToWorld(new THREE.Vector3(0.9, 0, 0));
-  expect("tug smokestack clang", fly(new THREE.Vector3(p.x, p.y + 8, p.z), new THREE.Vector3(0, -4, 0)).type, "hull");
+  const motorboat = boats.boats.find((b) => b.type === "outboard");
+  const block = motorboat.spec.blocks[0];
+  const x = ((block.x0 + block.x1) / 2) * motorboat.spec.len;
+  const p = motorboat.group.localToWorld(new THREE.Vector3(x, 0, 0));
+  expect("outboard cowling clang",
+    fly(new THREE.Vector3(p.x, p.y + 8, p.z), new THREE.Vector3(0, -4, 0), 400, motorboat).type, "hull");
 }
 
 // 4. stones sailing clear over the top must not be captured

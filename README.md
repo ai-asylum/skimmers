@@ -20,8 +20,13 @@ transitions, winner calls, and the bot fleet.
 ## How to play
 
 ```
-find a rock → shape it → paint it → skip battle
+pick a rock off your bench → skip battle
+             ↑ or make a new one: find → shape → paint → name it
 ```
+
+Your finished stones keep their names and live on a park bench by the lake —
+three floaters, three rocks. Tap one to race it again exactly as you left it,
+or tap an empty floater to go and carve another.
 
 | Verb | How |
 |---|---|
@@ -81,10 +86,27 @@ No build step. Plain ES modules; three.js comes from a CDN importmap.
   `Skimmer` physics as you, navigating the fairway waypoint by waypoint with
   skill-scaled wobble.
 - [`src/rock.js`](src/rock.js) — procedural stones: a drillable voxel field
-  meshed by marching cubes, layered canvas skin (base coat + brush strokes),
+  meshed by marching cubes, packed tighter (and darker, and slower to cut) the
+  closer to its middle you get. A bite that would snap the stone in two is
+  refused rather than taken, so the neck holding it together is the one thing the
+  drill won't cut. Plus a layered canvas skin (base coat + brush strokes) and
   spring-loaded googly eyes that glance at whichever rival stone is nearest.
 - [`src/marchingcubes.js`](src/marchingcubes.js) — the isosurface mesher, with
   its triangle table derived at load time rather than typed in by hand.
+- [`src/fish.js`](src/fish.js) — the three sculpted fish that guard a sunken
+  stone. They have no skeleton: a vertex shader bends each body with scrolling
+  Perlin noise, weighted head-to-tail so the nose holds steady and the tail
+  whips, and anchored to the fish's world position so every one swims on its own
+  phase. Geometry is baked out of `assets/models/*.fbx` by
+  `npm run bake:fish` — the game still fetches nothing at runtime.
+- [`src/foliage.js`](src/foliage.js) — the forest and the undergrowth under it,
+  re-scattered per hole and banded by height up the bank: willows at the
+  waterline, birch on the slopes, pine alone on the crests, with bushes, ferns,
+  flowers, mossy boulders and fallen logs filling in between. Models are
+  Quaternius' Ultimate Nature Pack (CC0), baked out of OBJ by
+  `npm run bake:nature` into delta-coded arrays that ship in the bundle, so this
+  fetches nothing at runtime either. One instanced draw per model, and a shared
+  vertex-shader wind that stirs canopies and leaves but not rock.
 - [`src/eyeconfig.js`](src/eyeconfig.js) — where the pupils sit in each face of
   the eye sheet. Re-measure the whole sheet with
   `node scripts/measure-eyes.mjs`, drag the sockets by hand in the Eyes Lab at

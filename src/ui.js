@@ -7,6 +7,9 @@ const $ = (id) => document.getElementById(id);
 
 export const els = {
   raceHud: $("race-hud"),
+  finishers: $("finishers"),
+  holeTimer: $("hole-timer"),
+  holeTimerVal: $("hole-timer-val"),
   popups: $("popups"),
   banner: $("banner"),
   flash: $("flash"),
@@ -14,23 +17,28 @@ export const els = {
   playBtn: $("play-btn"),
   phaseUi: $("phase-ui"),
   phaseTitle: $("phase-title"),
-  phaseHint: $("phase-hint"),
   phaseNext: $("phase-next"),
+  phaseBack: $("phase-back"),
   rockStats: $("rock-stats"),
   statFlat: $("stat-flat"),
   statHeft: $("stat-heft"),
   statGrit: $("stat-grit"),
   paintUi: $("paint-ui"),
-  swatches: $("swatches"),
   patterns: $("patterns"),
-  brushSize: $("brush-size"),
-  brushDot: $("brush-dot"),
+  colorBar: $("color-bar"),
+  colorKnob: $("color-knob"),
+  sizeBar: $("size-bar"),
+  sizeKnob: $("size-knob"),
+  shelfTags: $("shelf-tags"),
+  shelfRelease: $("shelf-release"),
+  tapHand: $("tap-hand"),
+  nameUi: $("name-ui"),
+  nameInput: $("name-input"),
+  nameOk: $("name-ok"),
   results: $("results-ui"),
   resultsTitle: $("results-title"),
   resultsList: $("results-list"),
   againBtn: $("again-btn"),
-  throwHint: $("throw-hint"),
-  throwUi: $("throw-ui"),
   wipe: $("wipe"),
   muter: $("muter"),
 };
@@ -83,24 +91,57 @@ export function flash(strength = 0.5) {
   );
 }
 
-export function setThrowHint(text) {
-  els.throwHint.textContent = text;
+// ---------------------------------------------------------------- finishers board
+// The running order of stones that made the hole, medals down from gold. Rows
+// are appended as they land so only the new name animates in.
+const MEDALS = ["🥇", "🥈", "🥉"];
+
+export function addFinisher(place, name, color, me = false) {
+  els.finishers.classList.remove("hidden");
+  const row = document.createElement("div");
+  row.className = "fin-row" + (me ? " me" : "");
+  const medal = document.createElement("span");
+  medal.className = "medal";
+  medal.textContent = MEDALS[place - 1] ?? `${place}.`;
+  const dot = document.createElement("span");
+  dot.className = "dot";
+  dot.style.background = color;
+  const nm = document.createElement("span");
+  nm.textContent = me ? `YOU · ${name}` : name;
+  row.append(medal, dot, nm);
+  els.finishers.appendChild(row);
+}
+
+export function clearFinishers() {
+  els.finishers.innerHTML = "";
+  els.finishers.classList.add("hidden");
+}
+
+/** the final-stretch countdown; pass null to take it back down */
+export function setHoleTimer(seconds) {
+  if (seconds == null) {
+    els.holeTimer.classList.add("hidden");
+    return;
+  }
+  const s = Math.max(0, Math.ceil(seconds));
+  els.holeTimer.classList.remove("hidden");
+  els.holeTimer.classList.toggle("urgent", s <= 10);
+  els.holeTimerVal.textContent = `${(s / 60) | 0}:${String(s % 60).padStart(2, "0")}`;
 }
 
 // ---------------------------------------------------------------- phases
-export function showPhase(title, hint) {
+export function showPhase(title) {
   els.phaseUi.classList.remove("hidden");
   els.phaseTitle.textContent = title;
-  els.phaseHint.textContent = hint;
 }
 export function hidePhase() {
   els.phaseUi.classList.add("hidden");
   els.rockStats.classList.add("hidden");
   els.paintUi.classList.add("hidden");
   els.phaseNext.classList.add("hidden");
-}
-export function setHint(hint) {
-  els.phaseHint.textContent = hint;
+  els.phaseBack.classList.add("hidden");
+  hideNameUI();
+  clearShelfTags();
 }
 export function showStats(flat, heft, grit) {
   els.rockStats.classList.remove("hidden");
@@ -109,22 +150,155 @@ export function showStats(flat, heft, grit) {
   els.statGrit.style.width = `${Math.round(grit * 100)}%`;
 }
 
-export function buildPaintUI({ colors, patterns, brush, selected, onColor, onPattern, onSize }) {
+// ---------------------------------------------------------------- rock shelf
+// One plate per stone on the bench, parked over its floater in screen space.
+// The plate is clickable as well as the slot itself, so a fat thumb aiming at
+// the name picks the rock it was aiming at. Empty floaters get no plate — the
+// pointing finger (setTapHand) does that job.
+let shelfPick = null;
+
+/** @param items {{slot:number,x:number,y:number,behind:boolean,name:string,sub:string,sel:boolean}[]} */
+export function updateShelfTags(items, onPick) {
+  shelfPick = onPick ?? shelfPick;
+  while (els.shelfTags.children.length < items.length) {
+    const tag = document.createElement("div");
+    tag.className = "rock-tag";
+    tag.onclick = () => shelfPick?.(+tag.dataset.slot);
+    tag.innerHTML = `<span class="nm"></span><span class="sub"></span>`;
+    els.shelfTags.appendChild(tag);
+  }
+  for (let i = 0; i < els.shelfTags.children.length; i++) {
+    const tag = els.shelfTags.children[i];
+    const it = items[i];
+    tag.classList.toggle("hidden", !it || it.behind);
+    if (!it) continue;
+    tag.dataset.slot = it.slot;
+    tag.classList.toggle("sel", !!it.sel);
+    tag.style.left = `${Math.round(it.x)}px`;
+    tag.style.top = `${Math.round(it.y)}px`;
+    tag.querySelector(".nm").textContent = it.name;
+    tag.querySelector(".sub").textContent = it.sub;
+  }
+}
+
+/** park the pointing finger on a screen point, or pass nothing to put it away */
+export function setTapHand(pt) {
+  if (!pt) {
+    els.tapHand.classList.add("hidden");
+    return;
+  }
+  els.tapHand.classList.remove("hidden");
+  els.tapHand.style.left = `${Math.round(pt.x)}px`;
+  els.tapHand.style.top = `${Math.round(pt.y)}px`;
+}
+
+export function clearShelfTags() {
+  els.shelfTags.innerHTML = "";
+  els.shelfRelease.classList.add("hidden");
+  setTapHand(null);
+}
+
+// ---------------------------------------------------------------- naming
+// The suggested name is already good enough to keep, so the box starts unfocused:
+// on a phone, focusing it here would throw the keyboard over the stone you just
+// painted. Tapping the box is the opt-in.
+export function showNameUI(suggestion) {
+  els.nameUi.classList.remove("hidden");
+  els.nameInput.value = suggestion;
+  els.nameInput.blur();
+}
+export function hideNameUI() {
+  els.nameUi.classList.add("hidden");
+}
+// tapping in wipes the suggestion in one go instead of asking for 20 backspaces
+els.nameInput.addEventListener("focus", () => els.nameInput.select());
+/** whatever's in the box, trimmed, or the suggestion it started with */
+export function nameValue(fallback) {
+  return els.nameInput.value.trim().slice(0, 20) || fallback;
+}
+
+/** The hue strip runs white at the top, black at the foot, spectrum between.
+ *  One stop table feeds both the CSS gradient and the sampled colour, so the
+ *  paint you load is exactly the pixel you put your thumb on. */
+const HUE_STOPS = [
+  [0.00, [255, 255, 255]],
+  [0.07, [255, 255, 255]],
+  [0.15, [255, 59, 48]],
+  [0.24, [255, 149, 0]],
+  [0.32, [255, 214, 10]],
+  [0.41, [52, 199, 89]],
+  [0.50, [0, 199, 190]],
+  [0.59, [50, 173, 230]],
+  [0.68, [10, 88, 255]],
+  [0.77, [125, 59, 237]],
+  [0.85, [255, 45, 146]],
+  [0.92, [123, 20, 69]],
+  [0.97, [0, 0, 0]],
+  [1.00, [0, 0, 0]],
+];
+const HUE_START = 0.15; // the brush arrives loaded with red
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+const hex = (rgb) => "#" + rgb.map((v) => v.toString(16).padStart(2, "0")).join("");
+
+function sampleHue(t) {
+  t = clamp01(t);
+  for (let i = 1; i < HUE_STOPS.length; i++) {
+    const [t1, c1] = HUE_STOPS[i];
+    if (t > t1) continue;
+    const [t0, c0] = HUE_STOPS[i - 1];
+    const k = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
+    return hex(c1.map((v, j) => Math.round(c0[j] + (v - c0[j]) * k)));
+  }
+  return hex(HUE_STOPS[HUE_STOPS.length - 1][1]);
+}
+
+const HUE_GRADIENT =
+  "linear-gradient(to bottom, " +
+  HUE_STOPS.map(([t, c]) => `${hex(c)} ${(t * 100).toFixed(1)}%`).join(", ") +
+  ")";
+
+/** press or drag anywhere along an edge strip, or arrow-key it: reports 0 at
+ *  the top of the strip and 1 at its foot. Returns a setter for the caller's
+ *  own starting value. */
+function dragStrip(bar, onFrac) {
+  let frac = 0;
+  const set = (f) => {
+    frac = clamp01(f);
+    onFrac(frac);
+  };
+  const fracAt = (y) => {
+    const r = bar.getBoundingClientRect();
+    return (y - r.top) / r.height;
+  };
+  bar.onpointerdown = (e) => {
+    e.preventDefault();
+    bar.setPointerCapture(e.pointerId);
+    bar.classList.add("grab");
+    set(fracAt(e.clientY));
+  };
+  bar.onpointermove = (e) => {
+    if (bar.hasPointerCapture(e.pointerId)) set(fracAt(e.clientY));
+  };
+  const release = (e) => {
+    if (bar.hasPointerCapture(e.pointerId)) bar.releasePointerCapture(e.pointerId);
+    bar.classList.remove("grab");
+  };
+  bar.onpointerup = release;
+  bar.onpointercancel = release;
+  bar.onkeydown = (e) => {
+    const step = { ArrowUp: -0.04, ArrowDown: 0.04, PageUp: -0.15, PageDown: 0.15, Home: -1, End: 1 }[e.key];
+    if (step === undefined) return;
+    e.preventDefault();
+    set(frac + step);
+  };
+  return set;
+}
+
+export function buildPaintUI({ patterns, brush, onColor, onPattern, onSize }) {
   els.paintUi.classList.remove("hidden");
-  els.paintUi.scrollTop = 0;
-  els.swatches.innerHTML = "";
+  els.colorBar.style.background = HUE_GRADIENT;
+
   els.patterns.innerHTML = "";
-  colors.forEach((c) => {
-    const b = document.createElement("div");
-    b.className = "swatch" + (c === selected ? " sel" : "");
-    b.style.background = c;
-    b.onclick = () => {
-      els.swatches.querySelectorAll(".swatch").forEach((x) => x.classList.remove("sel"));
-      b.classList.add("sel");
-      onColor(c);
-    };
-    els.swatches.appendChild(b);
-  });
   patterns.forEach((p, i) => {
     const b = document.createElement("div");
     b.className = "pattern-chip" + (i === 0 ? " sel" : "");
@@ -137,24 +311,29 @@ export function buildPaintUI({ colors, patterns, brush, selected, onColor, onPat
     els.patterns.appendChild(b);
   });
 
-  els.brushSize.min = brush.min;
-  els.brushSize.max = brush.max;
-  els.brushSize.value = brush.value;
-  const preview = () => {
-    // the dot apes the dab you are about to leave, in the paint you have loaded
-    const px = Math.round((els.brushSize.value / brush.max) * 30) + 8;
-    els.brushDot.style.width = els.brushDot.style.height = `${px}px`;
-  };
-  els.brushSize.oninput = () => {
-    preview();
-    onSize(Number(els.brushSize.value));
-  };
-  preview();
-}
+  // both knobs wear the loaded paint, so the thickness wedge doubles as a
+  // preview of the dab you are about to leave
+  const setColor = dragStrip(els.colorBar, (f) => {
+    const c = sampleHue(f);
+    els.colorBar.setAttribute("aria-valuenow", String(Math.round(f * 100)));
+    els.colorKnob.style.top = `${f * 100}%`;
+    els.colorKnob.style.background = c;
+    els.sizeKnob.style.background = c;
+    onColor(c);
+  });
 
-/** tint the brush preview dot with the paint currently loaded */
-export function setBrushColor(color) {
-  els.brushDot.style.background = color;
+  const span = brush.max - brush.min;
+  const setSize = dragStrip(els.sizeBar, (f) => {
+    const r = Math.round(brush.max - f * span); // fat end of the wedge is up
+    els.sizeBar.setAttribute("aria-valuenow", String(r));
+    els.sizeKnob.style.top = `${f * 100}%`;
+    const px = 9 + Math.round(((r - brush.min) / span) * 25);
+    els.sizeKnob.style.width = els.sizeKnob.style.height = `${px}px`;
+    onSize(r);
+  });
+
+  setColor(HUE_START);
+  setSize((brush.max - brush.value) / span);
 }
 
 // ---------------------------------------------------------------- results
@@ -171,6 +350,7 @@ export function showResults(rows, playerWon) {
       `<span class="place">${medals[i] ?? i + 1 + "th"}</span>` +
       `<span class="dot" style="background:${r.color}"></span>` +
       `<span class="rname">${r.me ? "YOU · " : ""}${r.name}</span>` +
+      `<span class="pts">${r.points ?? 0} pts</span>` +
       `<span>${"★".repeat(r.holes)}</span>` +
       `<span style="opacity:0.6;font-size:12px">&nbsp;${r.throws} throws</span>`;
     els.resultsList.appendChild(div);

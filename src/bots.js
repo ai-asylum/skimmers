@@ -21,10 +21,23 @@ export const BOT_PERSONAS = [
 
 const _dir = new THREE.Vector3();
 
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
 export class BotBrain {
-  constructor(skimmer, persona) {
+  /**
+   * `tier` is the difficulty class the player picked (cups.js TIERS). It bends
+   * the persona rather than replacing it, so Skipzilla is still the sharpest
+   * rival on the water at every class — there's just a wider gap between him
+   * and Plunkett down in Ripple than there is up in Maelstrom, where everyone
+   * is good.
+   */
+  constructor(skimmer, persona, tier = null) {
     this.s = skimmer;
     this.p = persona;
+    this.skill = clamp(persona.skill + (tier?.botSkill ?? 0), 0.2, 0.98);
+    this.aggro = clamp(persona.aggro * (tier?.aggroMul ?? 1), 0, 1);
+    const pm = tier?.patienceMul ?? 1;
+    this.patience = [persona.patience[0] * pm, persona.patience[1] * pm];
     this.cooldown = 1.5 + Math.random() * 3; // stagger the first volley
     this.fishT = 0;
     this.fishAt = null;
@@ -35,12 +48,12 @@ export class BotBrain {
     if (s.finished) return;
 
     // auto-fishing: bots take a skill-scaled break to reel their rock back
-    if (s.state === "sinking" && s.sinkT > 0.8 && !this.fishAt) {
+    if (s.state === "sinking" && s.sinkT > s.sinkDelay && !this.fishAt) {
       this.fishAt = s.pos.clone();
       // long enough for the full line choreography (sink to bed at
       // ~depth/2.4, line down at HOOK_SPEED, reel up) plus skill-scaled
       // dawdling at the surface — roughly what the player's minigame costs
-      this.fishT = 2.6 + lakeDepthAt(s.pos.x, s.pos.z) * 0.7 + (1 - this.p.skill) * 2.5 + Math.random() * 1.2;
+      this.fishT = 2.6 + lakeDepthAt(s.pos.x, s.pos.z) * 0.7 + (1 - this.skill) * 2.5 + Math.random() * 1.2;
       s.state = "fishing";
     }
     if (s.state === "fishing") {
@@ -58,11 +71,11 @@ export class BotBrain {
 
     this.cooldown -= ctx.dt;
     if (this.cooldown > 0) return;
-    const [pMin, pMax] = this.p.patience;
+    const [pMin, pMax] = this.patience;
     this.cooldown = pMin + Math.random() * (pMax - pMin);
 
     // consider a splash attack on the leading rival stone nearby
-    if (Math.random() < this.p.aggro * 0.5) {
+    if (Math.random() < this.aggro * 0.5) {
       const target = this._splashTarget(ctx);
       if (target) {
         this._throwAt(target.pos, "splash", ctx);
@@ -123,7 +136,7 @@ export class BotBrain {
         }
       }
     }
-    const wob = (1 - this.p.skill) * 0.12; // steadier than usual — just get out
+    const wob = (1 - this.skill) * 0.12; // steadier than usual — just get out
     const th = bestTh + (Math.random() - 0.5) * wob;
     _dir.set(Math.cos(th), 0, Math.sin(th));
     s.throwRock(_dir, bestPw, bestMode);
@@ -184,7 +197,7 @@ export class BotBrain {
     }
 
     // skill-scaled sloppiness
-    const wob = (1 - this.p.skill) * 0.19;
+    const wob = (1 - this.skill) * 0.19;
     const ang = (Math.random() - 0.5) * 2 * wob;
     const cos = Math.cos(ang), sin = Math.sin(ang);
     const dx = _dir.x * cos - _dir.z * sin;

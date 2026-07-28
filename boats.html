@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      Every boat, on a flat lake, with the collision solid drawn over it: the
+      hull box in yellow, the decks a stone can be caught by in red, the standing
+      columns in cyan. Those shapes are hand-numbered against the art in the
+      TYPES table in src/boats.js, and this page is how you see whether they
+      still line up — a waterline or a deck edge that has drifted off the model
+      shows here and nowhere else. Dev-only, so it stays out of vite's build
+      inputs; scripts/shot-boats.mjs grabs it as one png.
+    -->
+    <title>boat preview</title>
+    <style>
+      body { margin: 0; background: #223; color: #eee; font: 12px monospace; }
+      .row { display: flex; }
+      .cell { position: relative; }
+      .cap { position: absolute; left: 5px; top: 3px; text-shadow: 0 1px 2px #000; }
+    </style>
+  </head>
+  <body>
+    <div id="out"></div>
+    <script type="module">
+      import * as THREE from "three";
+      import { Boats } from "/src/boats.js";
+
+      const W = 520, H = 340;
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(W, H);
+      const out = document.getElementById("out");
+
+      // a still lake at y = 0, so the waterline is obvious
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x9fc7d9);
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x556677, 1.5));
+      const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+      sun.position.set(5, 8, 4);
+      scene.add(sun);
+      const water = new THREE.Mesh(
+        new THREE.PlaneGeometry(200, 200),
+        new THREE.MeshStandardMaterial({ color: 0x2e6b86, transparent: true, opacity: 0.85 })
+      );
+      water.rotation.x = -Math.PI / 2;
+      scene.add(water);
+
+      const boats = new Boats(scene);
+      const stubWater = { heightAt: () => 0 };
+      // let a few strokes play out so the paddle is mid-swing
+      for (let i = 0; i < 40; i++) boats.update(1 / 60, i / 60, stubWater, null);
+
+      const report = [];
+      for (const b of boats.boats) {
+        report.push({
+          type: b.type,
+          len: b.spec.len,
+          beam: +b.beam.toFixed(2),
+          keelY: +b.keelY.toFixed(2),
+          hullTop: +b.hullTop.toFixed(2),
+          decks: b.decks.map((d) => [+d.x0.toFixed(2), +d.x1.toFixed(2), +d.y.toFixed(2)]),
+          columns: b.columns.map((c) => [+c.x0.toFixed(2), +c.x1.toFixed(2), +c.top.toFixed(2)]),
+        });
+      }
+      window.__report = report;
+
+      /** the collision solid, drawn where the game thinks it is */
+      function debugBoxes(b) {
+        const g = new THREE.Group();
+        const hull = new THREE.Box3(
+          new THREE.Vector3(-b.halfLen, b.keelY, -b.beam / 2),
+          new THREE.Vector3(b.halfLen, b.hullTop, b.beam / 2)
+        );
+        g.add(new THREE.Box3Helper(hull, 0xffdc00));
+        for (const d of b.decks) {
+          const box = new THREE.Box3(
+            new THREE.Vector3(d.x0, d.y - 0.01, -b.beam / 2),
+            new THREE.Vector3(d.x1, d.y + 0.01, b.beam / 2)
+          );
+          g.add(new THREE.Box3Helper(box, 0xff3860));
+        }
+        for (const c of b.columns) {
+          const box = new THREE.Box3(
+            new THREE.Vector3(c.x0, c.top - 0.01, -b.beam / 2),
+            new THREE.Vector3(c.x1, c.top + 0.01, b.beam / 2)
+          );
+          g.add(new THREE.Box3Helper(box, 0x39cccc));
+        }
+        return g;
+      }
+
+      const VIEWS = {
+        persp: new THREE.Vector3(1.5, 0.85, 2.1),
+        side: new THREE.Vector3(0, 0.06, 1),
+        bow: new THREE.Vector3(1, 0.12, 0.02),
+        close: new THREE.Vector3(1.2, 0.5, 1.4),
+      };
+      const ZOOM = { close: 0.42 };
+
+      function shoot(b, view, label, withBoxes) {
+        const dbg = withBoxes ? debugBoxes(b) : null;
+        if (dbg) b.group.add(dbg);
+
+        const c = b.group.position;
+        const r = b.spec.len * 0.85 * (ZOOM[view] ?? 1);
+        const cam = new THREE.PerspectiveCamera(32, W / H, 0.1, 400);
+        const eye = VIEWS[view].clone().normalize().multiplyScalar(r * 3.1);
+        cam.position.set(c.x + eye.x, c.y + eye.y + r * 0.25, c.z + eye.z);
+        cam.lookAt(c.x, c.y + r * 0.1, c.z);
+        renderer.render(scene, cam);
+
+        if (dbg) b.group.remove(dbg);
+
+        const canvas = document.createElement("canvas");
+        canvas.width = W;
+        canvas.height = H;
+        canvas.getContext("2d").drawImage(renderer.domElement, 0, 0);
+        const cell = document.createElement("div");
+        cell.className = "cell";
+        cell.appendChild(canvas);
+        const cap = document.createElement("div");
+        cap.className = "cap";
+        cap.textContent = label;
+        cell.appendChild(cap);
+        return cell;
+      }
+
+      const seen = new Set();
+      for (const b of boats.boats) {
+        if (seen.has(b.type)) continue;
+        seen.add(b.type);
+        for (const boxes of [false, true]) {
+          const row = document.createElement("div");
+          row.className = "row";
+          for (const view of Object.keys(VIEWS)) {
+            row.appendChild(shoot(b, view, `${b.type} ${view}${boxes ? " +boxes" : ""}`, boxes));
+          }
+          out.appendChild(row);
+        }
+      }
+      window.__done = true;
+    </script>
+  </body>
+</html>

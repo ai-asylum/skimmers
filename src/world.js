@@ -1,12 +1,11 @@
 /**
  * The lake world: gradient sky dome with a fat toon sun, low-poly shore ring
- * with sand -> grass -> hills, instanced voxel trees, drifting clouds, the
- * whirlpool hole (spiralling bowl, funnel throat, bare flagpole), tee dock, and
- * wander-y ducks.
+ * with sand -> grass -> hills, the instanced forest and undergrowth of
+ * foliage.js, drifting clouds, the whirlpool hole (spiralling bowl, funnel
+ * throat, bare flagpole), tee dock, and wander-y ducks.
  * Lighting per the mood-lighting-rig scrap: warm key, cool fill, low ambient.
  */
 import * as THREE from "three";
-import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { HOOK_SPEED } from "./fishing.js";
 import {
   LAKE_R, WATER_Y, lakeDepthAt, sunkRestY, SWELL_GLSL, WAVE_AMP,
@@ -14,6 +13,7 @@ import {
 } from "./water.js";
 import { Terrain, terrainHeightAt } from "./terrain.js";
 import { Grass } from "./grass.js";
+import { Trees, Foliage, updateWind } from "./foliage.js";
 import { celMat } from "./celshader.js";
 
 const INK = 0x16324a;
@@ -57,122 +57,10 @@ function makeSky(scene) {
   return sky;
 }
 
-// ------------------------------------------------------------------ trees
+// ------------------------------------------------------------------ ground
 /** ground height — now delegated to the displaced Terrain (src/terrain.js) */
 export function shoreHeight(x, z) {
   return terrainHeightAt(x, z);
-}
-
-// shared clock for the wind-sway shader patch (team scrap: vertex-sway-shader-patch)
-const swayTime = { value: 0 };
-
-/**
- * `y0`..`y1` is the local height band over which the sway winds up, so a tree
- * can hold its trunk still and only stir from the canopy up.
- */
-function patchSway(mat, amp, y0 = -1.2, y1 = 1.6) {
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uSwayTime = swayTime;
-    shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nuniform float uSwayTime;")
-      .replace(
-        "#include <begin_vertex>",
-        /* glsl */ `
-        #include <begin_vertex>
-        {
-          #ifdef USE_INSTANCING
-            vec4 swayW = modelMatrix * instanceMatrix * vec4(position, 1.0);
-          #else
-            vec4 swayW = modelMatrix * vec4(position, 1.0);
-          #endif
-          float swayK = smoothstep(${y0.toFixed(2)}, ${y1.toFixed(2)}, position.y);
-          transformed.x += sin(uSwayTime * 1.7 + swayW.x * 0.35 + swayW.z * 0.31) * ${amp.toFixed(3)} * swayK;
-          transformed.z += cos(uSwayTime * 1.3 + swayW.z * 0.29) * ${(amp * 0.7).toFixed(3)} * swayK;
-        }`
-      );
-  };
-  mat.customProgramCacheKey = () => `sway${amp}_${y0}_${y1}`;
-}
-
-// Voxel box trees ported from spellwright's prop models (tree.js, pine-tree.js).
-// Sizes, offsets and the size-graded canopy greens are verbatim; origin sits at
-// the trunk base so an instance drops straight onto the ground height. Spellwright
-// gives every part its own scene node to rustle; here the whole tree merges into
-// one geometry with the palette baked into vertex colours, so the forest is two
-// instanced draws and the canopy motion comes from the vertex sway above.
-const TREE_PARTS = {
-  // Broadleaf: trunk buried mid-canopy, core block with four overlapping side
-  // bulges and a cap, each cube a hair lighter as it gets smaller.
-  broadleaf: [
-    { size: [0.8, 4.8, 0.8], at: [0, 2.4, 0], color: 0x4a2f1c },
-    { size: [0.36, 0.36, 0.36], at: [0.44, 2.8, 0], color: 0x33200f },
-    { size: [2.8, 2.0, 2.8], at: [0, 4.6, 0], color: 0x3e6b2c },
-    { size: [1.6, 1.0, 1.6], at: [-0.2, 5.8, 0.1], color: 0x487536 },
-    { size: [1.0, 1.4, 1.2], at: [-1.4, 4.8, 0.4], color: 0x497637 },
-    { size: [1.0, 1.2, 1.2], at: [1.4, 4.9, -0.2], color: 0x4a7738 },
-    { size: [1.2, 1.0, 0.8], at: [0.2, 5.1, -1.4], color: 0x4b7839 },
-    { size: [1.0, 0.8, 0.8], at: [-0.1, 4.2, 1.4], color: 0x4c793a },
-  ],
-  // Pine: slim trunk under four tapered tiers, each sunk 30% into the one below
-  // so the silhouette reads as a cone rather than a stack.
-  pine: [
-    { size: [0.5, 4.0, 0.5], at: [0, 2.0, 0], color: 0x3a2410 },
-    { size: [2.4, 1.4, 2.4], at: [0, 2.4, 0], color: 0x274d2a },
-    { size: [2.0, 1.3, 2.0], at: [0, 3.45, 0], color: 0x2b542f },
-    { size: [1.6, 1.2, 1.6], at: [0, 4.45, 0], color: 0x2f5b33 },
-    { size: [1.0, 1.0, 1.0], at: [0, 5.35, 0], color: 0x336337 },
-  ],
-};
-
-function makeTreeGeometry(parts) {
-  const boxes = parts.map(({ size, at, color }) => {
-    const g = new THREE.BoxGeometry(size[0], size[1], size[2]);
-    g.translate(at[0], at[1], at[2]);
-    g.deleteAttribute("uv"); // untextured, and merging needs the sets to match
-    const c = new THREE.Color(color);
-    const n = g.attributes.position.count;
-    const rgb = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) { rgb[i * 3] = c.r; rgb[i * 3 + 1] = c.g; rgb[i * 3 + 2] = c.b; }
-    g.setAttribute("color", new THREE.BufferAttribute(rgb, 3));
-    return g;
-  });
-  return mergeGeometries(boxes);
-}
-
-function makeTrees(scene) {
-  const N = 90;
-  const species = ["pine", "broadleaf"].map((key) => {
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true });
-    // Dead below 1.2u so the trunk stays rooted, full by 5.5u — the trunk holds
-    // still and the canopy stirs, which is how spellwright's gated trunk sway
-    // plus per-leaf rustle reads from a distance.
-    patchSway(mat, 0.14, 1.2, 5.5);
-    const mesh = new THREE.InstancedMesh(makeTreeGeometry(TREE_PARTS[key]), mat, N);
-    mesh.count = 0;
-    scene.add(mesh);
-    return mesh;
-  });
-  const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
-  const e = new THREE.Euler();
-  let placed = 0, guard = 0;
-  while (placed < N && guard++ < 4000) {
-    const a = Math.random() * Math.PI * 2;
-    const r = LAKE_R + 8 + Math.random() * 90;
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    const y = shoreHeight(x, z);
-    if (y < 0.4 || y > 34) continue; // the banks stand a lot taller now
-    // The voxel trees are ~6u tall where the old cones were ~4.6u, so the scale
-    // range is pulled in to keep the same 4–10u spread of silhouettes.
-    const s = 0.65 + Math.random() * 0.85;
-    e.set(0, Math.random() * Math.PI, (Math.random() - 0.5) * 0.08);
-    q.setFromEuler(e);
-    m.compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(s, s, s));
-    const mesh = species[Math.random() < 0.55 ? 0 : 1]; // pine-leaning mix
-    mesh.setMatrixAt(mesh.count++, m);
-    placed++;
-  }
-  for (const mesh of species) mesh.instanceMatrix.needsUpdate = true;
 }
 
 // ------------------------------------------------------------------ clouds
@@ -961,7 +849,8 @@ export class World {
     this.scene = scene;
     makeSky(scene);
     this.terrain = new Terrain(scene);
-    makeTrees(scene);
+    this.trees = new Trees(scene);
+    this.foliage = new Foliage(scene);
     this.grass = new Grass(scene);
     this.clouds = makeClouds(scene);
     this.flag = new WhirlpoolHole(scene);
@@ -986,11 +875,13 @@ export class World {
   /** rebuild the ground + grass for a hole's channel (null path => radial disc) */
   setHole(path, halfWidth) {
     this.terrain.setPath(path, halfWidth);
+    this.trees.setHole();
+    this.foliage.setHole();
     this.grass.setHole();
   }
 
   update(dt, elapsed, water) {
-    swayTime.value = elapsed;
+    updateWind(elapsed);
     this.grass.update(elapsed);
     this.flag.update(dt, elapsed, water);
     this.course.update(dt, elapsed, water);

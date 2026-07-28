@@ -2,9 +2,15 @@
  * Boats: moving checkpoints, hazards — and BUMPERS. Three types share the
  * spline-loop movement (team scrap: arc-length-parameterized journey spline):
  *
- *   row   — the classic oarsman, medium pace, oar-dip ripples
- *   sail  — lean and quick, heeling with a fluttering sail
- *   steam — a slow fat tug with a puffing smokestack
+ *   row      — a wooden rowboat, medium pace, its paddler dipping a blade a side
+ *   outboard — the same hull with a motor on the transom: quick, drags a wake
+ *   trawler  — a slow fat fishing boat, three levels to land on, funnel smoke
+ *
+ * The hulls are baked models (src/boatdata.js, out of scripts/bake-boats.mjs)
+ * normalised to unit length with the keel at y = 0. A type gives its world `len`
+ * and how deep it floats (`sink`); every collision surface below is then written
+ * as a fraction of that same model, measured off the geometry, so the boxes
+ * follow the art instead of drifting from it.
  *
  * collide() classifies a flying rock's contact: "hull" (elastic rebound —
  * bank shots keep your skip chain alive) or "deck" (land in the boat and
@@ -12,129 +18,212 @@
  */
 import * as THREE from "three";
 import { LAKE_R, WATER_Y } from "./water.js";
+import { BOAT_MODELS, POS_SCALE } from "./boatdata.js";
 
-const HULL_TOP = 0.7; // top of the bare hull sides
+// How far above a deck the boat still counts as solid: the paddler, the
+// wheelhouse, the motor. A stone crossing lower than this off to the side
+// clangs into them rather than sailing through.
+const STAND = 1.0;
 
-// `decks` are the standable surfaces along local x — a stone coming down onto
-// one is caught and ferried. `blocks` are solid with nothing to stand on (the
-// tug's smokestack): those just clang. Everything above both is open sky.
+// The paddle, as a fraction of its boat's length — a real one is about half a
+// small rowboat long.
+const PADDLE_LEN = 0.52;
+
+// A deck edge this close to the model's own bow or stern is the open end of the
+// boat, and gets slack for a stone hanging over the rail (see _deckX).
+const END_EDGE = 0.03;
+
+/**
+ * `decks` are the standable surfaces along local x — a stone coming down onto
+ * one is caught and ferried. `blocks` are solid with nothing to stand on (the
+ * outboard motor): those just clang. Everything above both is open sky.
+ *
+ * Heights are fractions of the model's length, measured up from its lowest
+ * point, and `sink` is where the waterline crosses it. Decks sit at the highest
+ * real surface a stone can rest on: the thwarts of the rowboats, the hold floor
+ * and the roof of the trawler. These hulls are much shallower for their length
+ * than the boxes they replaced, so those decks sit low — what keeps a skimming
+ * stone out of them is the rail test in _cameInOverRail, not their height. The
+ * two wooden boats share a hull, so they share a waterline: about a third of it
+ * is wet on both.
+ */
 const TYPES = {
-  row: { len: 3.4, wid: 1.5, deckY: 0.62 },
-  sail: { len: 4.4, wid: 1.6, deckY: 0.68 },
-  steam: {
-    len: 5.4, wid: 2.3, deckY: 0.9,
+  row: {
+    model: "rowboat",
+    len: 4.2,
+    sink: 0.05, // waterline just under the rubbing strake
+    hullTop: 0.148, // gunwale
+    decks: [{ x0: -0.48, x1: 0.47, y: 0.12 }], // thwarts, and the open boat around them
+    paddler: { x: -0.12, shirt: 0xe0503a, reach: { x: 0.3, y: 0.5 } }, // out front, on the shaft
+    paddle: true,
+  },
+  outboard: {
+    model: "outboard",
+    len: 4.4,
+    // measured from the propeller rather than the keel, which sits at 0.10, so
+    // the number is bigger than the rowboat's for the same waterline
+    sink: 0.146,
+    hullTop: 0.24,
+    decks: [{ x0: -0.3, x1: 0.47, y: 0.21 }], // thwarts, forward of the motor
+    blocks: [{ x0: -0.5, x1: -0.3, top: 0.29 }], // cowling and tiller
+    // reaching back and down for the tiller, which the cowling block covers
+    paddler: { x: -0.2, shirt: 0x37c8e0, reach: { x: -0.32, y: 0.38 } },
+  },
+  trawler: {
+    model: "trawler",
+    len: 6.2,
+    sink: 0.14, // the boot stripe painted round the hull
+    hullTop: 0.28, // bulwarks
     decks: [
-      { x0: -2.7, x1: -1.6, y: 0.9 },   // aft deck
-      { x0: -1.6, x1: 0.4, y: 1.84 },   // cabin roof
-      { x0: 1.35, x1: 2.7, y: 0.9 },    // foredeck, past the smokestack
+      { x0: -0.48, x1: -0.13, y: 0.19 }, // fish hold, aft
+      { x0: -0.13, x1: 0.16, y: 0.34 }, // wheelhouse roof
+      { x0: 0.16, x1: 0.48, y: 0.27 }, // foredeck
     ],
-    blocks: [{ x0: 0.4, x1: 1.35, top: 2.28 }], // smokestack + its brass rim
+    funnel: { x: -0.05, y: 0.36 }, // where the smoke leaves, just clear of the roof
   },
 };
 
-const wood = new THREE.MeshStandardMaterial({ color: 0xa9682f, flatShading: true });
-const woodDark = new THREE.MeshStandardMaterial({ color: 0x7c4a1e, flatShading: true });
-const canvasMat = new THREE.MeshStandardMaterial({ color: 0xf4efe2, flatShading: true, side: THREE.DoubleSide });
 const skin = new THREE.MeshStandardMaterial({ color: 0xf2c49b, flatShading: true });
+const hatMat = new THREE.MeshStandardMaterial({ color: 0x7c4a1e, flatShading: true });
 
-function buildHull(len, wid, color = wood) {
-  const g = new THREE.Group();
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(len, 0.7, wid), color);
-  hull.position.y = 0.35;
-  g.add(hull);
-  const inner = new THREE.Mesh(new THREE.BoxGeometry(len - 0.5, 0.5, wid - 0.45), woodDark);
-  inner.position.y = 0.5;
-  g.add(inner);
-  for (const s of [-1, 1]) {
-    const prow = new THREE.Mesh(new THREE.ConeGeometry(wid / 2, 1.1, 4), color);
-    prow.rotation.z = s * Math.PI / 2;
-    prow.rotation.y = Math.PI / 4;
-    prow.position.set(s * (len / 2 + 0.35), 0.35, 0);
-    prow.scale.y = 1.4;
-    g.add(prow);
-  }
-  return g;
+/** base64 -> typed array; the bake format src/fish.js reads too */
+function decode(b64, Type) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Type(bytes.buffer);
 }
 
-function addCrew(g, shirtColor, x = 0) {
-  const shirt = new THREE.MeshStandardMaterial({ color: shirtColor, flatShading: true });
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.4, 4, 8), shirt);
-  body.position.set(x, 1.05, 0);
-  g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 7), skin);
-  head.position.set(x, 1.62, 0);
-  g.add(head);
-  const hat = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.3, 0.16, 8), woodDark);
-  hat.position.set(x, 1.78, 0);
-  g.add(hat);
-}
+const _geos = {};
+let _mat = null;
 
-function buildBoatMesh(type) {
-  const dims = TYPES[type];
-  const g = new THREE.Group();
+/** rebuild a baked model: dequantise the vertices, expand the palette per triangle */
+function boatGeometry(name) {
+  if (_geos[name]) return _geos[name];
+  const model = BOAT_MODELS[name];
+  const quant = decode(model.pos, Int16Array);
+  const tri = decode(model.tri, Uint8Array);
 
-  if (type === "row") {
-    g.add(buildHull(dims.len, dims.wid));
-    const bench = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, dims.wid - 0.4), woodDark);
-    bench.position.y = 0.62;
-    g.add(bench);
-    addCrew(g, 0xe0503a);
-    const oarMat = new THREE.MeshStandardMaterial({ color: 0xdcb377, flatShading: true });
-    const oars = [];
-    for (const s of [-1, 1]) {
-      const pivot = new THREE.Group();
-      pivot.position.set(0, 0.75, s * (dims.wid / 2 + 0.02));
-      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.0, 6), oarMat);
-      shaft.rotation.x = s * Math.PI / 2.6;
-      shaft.position.z = s * 0.8;
-      shaft.position.y = -0.3;
-      pivot.add(shaft);
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.05, 0.5), oarMat);
-      blade.position.set(0, -1.05, s * 1.55);
-      pivot.add(blade);
-      g.add(pivot);
-      oars.push({ pivot, side: s });
+  const pos = new Float32Array(quant.length);
+  for (let i = 0; i < quant.length; i++) pos[i] = quant[i] / POS_SCALE;
+
+  const palette = model.palette.map((hex) => new THREE.Color().setHex(hex));
+  const col = new Float32Array(quant.length);
+  for (let t = 0; t < tri.length; t++) {
+    const c = palette[tri[t]];
+    for (let k = 0; k < 3; k++) {
+      const i = (t * 3 + k) * 3;
+      col[i] = c.r;
+      col[i + 1] = c.g;
+      col[i + 2] = c.b;
     }
-    g.userData.oars = oars;
-  } else if (type === "sail") {
-    const white = new THREE.MeshStandardMaterial({ color: 0xe8ecee, flatShading: true });
-    g.add(buildHull(dims.len, dims.wid, white));
-    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 3.4, 6), woodDark);
-    mast.position.set(0.4, 2.2, 0);
-    g.add(mast);
-    // triangular sail
-    const shape = new THREE.Shape();
-    shape.moveTo(0, 0);
-    shape.lineTo(0, 2.7);
-    shape.lineTo(-1.9, 0);
-    shape.lineTo(0, 0);
-    const sail = new THREE.Mesh(new THREE.ShapeGeometry(shape), canvasMat);
-    sail.position.set(0.36, 0.9, 0);
-    sail.rotation.y = 0.2;
-    g.add(sail);
-    g.userData.sail = sail;
-    addCrew(g, 0x37c8e0, -1.2);
-  } else {
-    // steam tug
-    const red = new THREE.MeshStandardMaterial({ color: 0xb44a3a, flatShading: true });
-    g.add(buildHull(dims.len, dims.wid, red));
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.1, dims.wid - 0.8), canvasMat);
-    cabin.position.set(-0.6, 1.15, 0);
-    g.add(cabin);
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.16, dims.wid - 0.5), woodDark);
-    roof.position.set(-0.6, 1.76, 0);
-    g.add(roof);
-    const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 1.3, 8),
-      new THREE.MeshStandardMaterial({ color: 0x3c454a, flatShading: true }));
-    stack.position.set(0.9, 1.6, 0);
-    g.add(stack);
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.06, 6, 10),
-      new THREE.MeshStandardMaterial({ color: 0xffd24a, flatShading: true }));
-    rim.rotation.x = Math.PI / 2;
-    rim.position.set(0.9, 2.22, 0);
-    g.add(rim);
-    g.userData.stack = stack;
-    addCrew(g, 0x2e5d8f, -0.6);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  // non-indexed, so this hands every triangle its own face normal — the flat
+  // look the rest of the game uses
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  _geos[name] = geo;
+  return geo;
+}
+
+/** one material for every boat: the colour rides in the vertices */
+function boatMaterial() {
+  _mat ??= new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    flatShading: true,
+    roughness: 0.78,
+    metalness: 0,
+  });
+  return _mat;
+}
+
+/**
+ * A baked model at world scale `len`. `drop` shifts it down, in model units: the
+ * waterline for a hull, the mid-plane of the blades for the paddle.
+ */
+function modelMesh(name, len, drop) {
+  const mesh = new THREE.Mesh(boatGeometry(name), boatMaterial());
+  mesh.scale.setScalar(len);
+  mesh.position.y = -drop * len;
+  return mesh;
+}
+
+/** a bone between two points: a capsule spun round to look along b - a */
+function limb(a, b, radius, mat) {
+  const span = new THREE.Vector3().subVectors(b, a);
+  const mesh = new THREE.Mesh(
+    new THREE.CapsuleGeometry(radius, Math.max(span.length() - radius * 2, 0.01), 2, 6),
+    mat,
+  );
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), span.clone().normalize());
+  mesh.position.addVectors(a, b).multiplyScalar(0.5);
+  return mesh;
+}
+
+/**
+ * A crew member sitting on `deckY`, facing the bow, hands out at `reach` — where
+ * the paddle goes on the rowboat and the tiller on the outboard. Sizes are in
+ * world units and don't scale with the boat: a person is a person.
+ *
+ * Its shape is doing a job. The old crew was one fat capsule, which at the size
+ * a ferry crosses the screen read as a thermos flask stood on a plank, so the
+ * torso is narrow, the head clears the shoulders, and the arms run out to the
+ * hands to tie the figure to whatever it is holding.
+ */
+function addCrew(g, shirtColor, x, deckY, reach) {
+  const shirt = new THREE.MeshStandardMaterial({ color: shirtColor, flatShading: true });
+  const parts = [
+    [new THREE.CylinderGeometry(0.19, 0.14, 0.5, 8), shirt, 0.34], // torso, widening to the shoulders
+    [new THREE.CylinderGeometry(0.07, 0.08, 0.1, 6), skin, 0.62],
+    [new THREE.SphereGeometry(0.15, 8, 6), skin, 0.79],
+    [new THREE.CylinderGeometry(0.26, 0.26, 0.03, 12), hatMat, 0.86], // brim
+    [new THREE.CylinderGeometry(0.13, 0.16, 0.13, 8), hatMat, 0.92],
+  ];
+  for (const [geo, mat, y] of parts) {
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, deckY + y, 0);
+    g.add(mesh);
+  }
+
+  const hands = new THREE.Vector3(x + reach.x, deckY + reach.y, 0);
+  for (const side of [-1, 1]) {
+    const shoulder = new THREE.Vector3(x, deckY + 0.55, side * 0.16);
+    g.add(limb(shoulder, hands.clone().setZ(side * 0.18), 0.055, shirt));
+  }
+  return hands;
+}
+
+/**
+ * The paddle hangs in its own pivot at the paddler's hands, laid across the boat
+ * so rolling the pivot dips one blade and then the other — a kayak stroke, which
+ * is what this double-bladed model is for.
+ */
+function addPaddle(g, hands, len) {
+  const pivot = new THREE.Group();
+  pivot.position.copy(hands);
+  const paddle = modelMesh("paddle", len, BOAT_MODELS.paddle.size[1] / 2);
+  paddle.rotation.y = -Math.PI / 2; // a bow-to-stern model, laid port-to-starboard
+  pivot.add(paddle);
+  g.add(pivot);
+  return pivot;
+}
+
+function buildBoat(spec) {
+  const g = new THREE.Group();
+  g.add(modelMesh(spec.model, spec.len, spec.sink));
+
+  // the crew and the paddle stand on the highest deck, in the group's frame
+  const topDeck = spec.decks.reduce((a, d) => Math.max(a, d.y), -Infinity);
+  const deckY = (topDeck - spec.sink) * spec.len;
+
+  if (spec.paddler) {
+    const { x, shirt, reach } = spec.paddler;
+    const hands = addCrew(g, shirt, x * spec.len, deckY, reach);
+    if (spec.paddle) g.userData.paddle = addPaddle(g, hands, spec.len * PADDLE_LEN);
   }
   return g;
 }
@@ -142,26 +231,48 @@ function buildBoatMesh(type) {
 class Boat {
   constructor(scene, type, pathPoints, speed, phase) {
     this.type = type;
-    this.dims = TYPES[type];
-    this.group = buildBoatMesh(type);
+    const spec = TYPES[type];
+    this.spec = spec;
+    this.group = buildBoat(spec);
     scene.add(this.group);
-    // tallest first, so a stone dropping onto the tug lands on the cabin roof
-    // rather than punching through to the deck below it
-    this.decks = (this.dims.decks ||
-      [{ x0: -this.dims.len / 2, x1: this.dims.len / 2, y: this.dims.deckY }])
-      .slice().sort((a, b) => b.y - a.y);
-    // how high the boat is solid at each stretch of x: a deck plus the crew,
-    // mast or cabin standing on it, or a block's own top
+
+    // model fractions -> the group's frame: the group origin rides the
+    // waterline, so every height loses `sink` and everything scales by `len`
+    const toX = (x) => x * spec.len;
+    const toY = (y) => (y - spec.sink) * spec.len;
+
+    this.halfLen = spec.len / 2;
+    this.beam = BOAT_MODELS[spec.model].size[2] * spec.len;
+    this.keelY = toY(0);
+    this.hullTop = toY(spec.hullTop);
+    // tallest first, so a stone dropping onto the trawler lands on the
+    // wheelhouse roof rather than punching through to the deck below it
+    this.decks = spec.decks
+      .map((d) => ({
+        x0: toX(d.x0),
+        x1: toX(d.x1),
+        y: toY(d.y),
+        openLo: d.x0 <= -0.5 + END_EDGE,
+        openHi: d.x1 >= 0.5 - END_EDGE,
+      }))
+      .sort((a, b) => b.y - a.y);
+    // how high the boat is solid at each stretch of x: a deck plus whatever
+    // stands on it, or a block's own top
     this.columns = [
-      ...this.decks.map((d) => ({ x0: d.x0, x1: d.x1, top: d.y + 1.0 })),
-      ...(this.dims.blocks || []),
+      ...this.decks.map((d) => ({ x0: d.x0, x1: d.x1, top: d.y + STAND })),
+      ...(spec.blocks || []).map((b) => ({ x0: toX(b.x0), x1: toX(b.x1), top: toY(b.top) })),
     ];
+    this.funnel = spec.funnel
+      ? new THREE.Vector3(toX(spec.funnel.x), toY(spec.funnel.y), 0)
+      : null;
+
     this.curve = new THREE.CatmullRomCurve3(pathPoints, true, "centripetal", 0.6);
     this.speed = speed;
     this.len = this.curve.getLength();
     this.t = phase;
     this.strokePhase = Math.random() * Math.PI * 2;
-    this._lastDip = 0;
+    this._dipSide = 0;
+    this._wakeT = 0;
     this._smokeT = 0;
   }
 
@@ -177,47 +288,48 @@ class Boat {
     this.group.rotation.z = Math.sin(elapsed * 1.3 + this.strokePhase) * 0.04;
 
     this.strokePhase += dt * 2.4;
+
     if (this.type === "row") {
       const stroke = Math.sin(this.strokePhase);
-      for (const oar of this.group.userData.oars) {
-        oar.pivot.rotation.x = stroke * 0.35 * oar.side;
-        oar.pivot.rotation.y = Math.cos(this.strokePhase) * 0.4;
+      const paddle = this.group.userData.paddle;
+      // steep enough that the low blade reaches the water the ripples appear in
+      paddle.rotation.x = stroke * 0.85; // the +z blade goes down on the positive half
+      paddle.rotation.y = Math.cos(this.strokePhase) * 0.22;
+      // ripples where the blade that just went under enters the water: local +z
+      // is the boat's port side out here
+      const side = Math.sign(stroke);
+      if (Math.abs(stroke) > 0.9 && side !== this._dipSide && particles) {
+        this._dipSide = side;
+        const reach = this.spec.len * PADDLE_LEN * 0.42;
+        particles.oarDip(p.x - tan.z * side * reach, p.z + tan.x * side * reach);
       }
-      if (stroke > 0.92 && elapsed - this._lastDip > 1.2 && particles) {
-        this._lastDip = elapsed;
-        const side = new THREE.Vector3(-tan.z, 0, tan.x);
-        for (const s of [-1, 1]) {
-          particles.oarDip(p.x + side.x * s * 1.6, p.z + side.z * s * 1.6);
-        }
+    } else if (this.type === "outboard") {
+      this._wakeT -= dt;
+      if (this._wakeT <= 0 && particles) {
+        this._wakeT = 0.2 + Math.random() * 0.12;
+        particles.wake(p.x - tan.x * this.halfLen, p.z - tan.z * this.halfLen);
       }
-    } else if (this.type === "sail") {
-      const sail = this.group.userData.sail;
-      sail.rotation.y = 0.2 + Math.sin(elapsed * 2.1 + this.strokePhase) * 0.09;
-      this.group.rotation.z += 0.06; // constant heel
     } else {
-      // steam tug puffs
       this._smokeT -= dt;
       if (this._smokeT <= 0 && particles) {
         this._smokeT = 0.35 + Math.random() * 0.25;
-        const stackWorld = this.group.localToWorld(new THREE.Vector3(0.9, 2.3, 0));
-        particles.smoke(stackWorld);
+        particles.smoke(this.group.localToWorld(this.funnel.clone()));
       }
     }
   }
 
   /**
    * A deck's catch window along local x. `grip` is slack for a stone hanging
-   * over the rail, so it only applies at the bow/stern ends — internal edges
-   * (where one deck level meets the next) stay exact.
+   * over the rail, so it only applies where the deck runs out to the bow or the
+   * stern — internal edges (where one deck level meets the next) stay exact.
    */
   _deckX(d, grip) {
-    const half = this.dims.len / 2;
-    return [d.x0 <= -half + 0.01 ? d.x0 - grip : d.x0, d.x1 >= half - 0.01 ? d.x1 + grip : d.x1];
+    return [d.openLo ? d.x0 - grip : d.x0, d.openHi ? d.x1 + grip : d.x1];
   }
 
   /** how high the boat is solid at local x — above this the stone flies free */
   _ceilingAt(x) {
-    let top = HULL_TOP;
+    let top = this.hullTop;
     for (const c of this.columns) {
       if (x >= c.x0 && x <= c.x1) top = Math.max(top, c.top);
     }
@@ -226,7 +338,7 @@ class Boat {
 
   /** the highest deck the stone is over at local x/z, if any */
   _deckUnder(x, z, grip) {
-    if (Math.abs(z) > this.dims.wid / 2 + grip) return null;
+    if (Math.abs(z) > this.beam / 2 + grip) return null;
     for (const d of this.decks) {
       const [lo, hi] = this._deckX(d, grip);
       if (x >= lo && x <= hi) return d;
@@ -235,19 +347,54 @@ class Boat {
   }
 
   /**
+   * Did the stone get in over the rail, or through the side of the boat?
+   *
+   * A deck below the gunwale sits at the bottom of a box that is open at the top
+   * only. Come down through that opening and you are aboard; arrive through a
+   * side and you were only ever grazing the flank, which is what keeps a flat
+   * skim boinging off these low hulls instead of dropping into them.
+   *
+   * The frame's segment is extended into a ray, so the answer depends on the
+   * direction the stone arrived from rather than on where the frame happened to
+   * start — a fast drop clears the whole freeboard inside one step, and testing
+   * the segment alone would find no crossing at all.
+   */
+  _cameInOverRail(prev, dir, d, xLo, xHi, hz) {
+    const rail = Math.max(d.y, this.hullTop);
+    if (rail <= d.y + 1e-6) return true; // an open deck on top: nothing to clear
+
+    let tEnter = -Infinity, tExit = Infinity, axis = -1;
+    const slabs = [
+      [prev.x, dir.x, xLo, xHi, 0],
+      [prev.y, dir.y, d.y, rail, 1],
+      [prev.z, dir.z, -hz, hz, 2],
+    ];
+    for (const [p, delta, lo, hi, ax] of slabs) {
+      if (Math.abs(delta) < 1e-9) {
+        if (p < lo || p > hi) return false; // parallel to this slab and outside it
+        continue;
+      }
+      const a = (lo - p) / delta, b = (hi - p) / delta;
+      const near = Math.min(a, b), far = Math.max(a, b);
+      if (near > tEnter) { tEnter = near; axis = ax; }
+      if (far < tExit) tExit = far;
+    }
+    return tExit >= tEnter && axis === 1;
+  }
+
+  /**
    * Sweep prev -> now against the decks. A stone covers more than a deck's
    * thickness in a single frame, so a point sample at the new position misses
    * the deck and the stone drops clean through the boat. Instead: clip the
    * frame's segment to the deck's footprint and see whether the stone was above
    * the deck entering it and below on the way out — that's a landing, however
-   * fast or steep the arc was.
+   * fast or steep the arc was, as long as it came in over the rail.
    */
   _deckLanding(prev, local, radius) {
-    const { wid } = this.dims;
     // matches the hull box below, so there's no seam where a stone dropping just
     // outside the gunwale gets boinged instead of caught
     const grip = radius;
-    const hz = wid / 2 + grip;
+    const hz = this.beam / 2 + grip;
     const dx = local.x - prev.x, dz = local.z - prev.z, dy = local.y - prev.y;
 
     for (const d of this.decks) {
@@ -268,6 +415,7 @@ class Boat {
       if (!over) continue;
       // above the deck on the way in, at or under it on the way out?
       if (prev.y + dy * t0 < d.y || prev.y + dy * t1 > d.y + 0.1) continue;
+      if (!this._cameInOverRail(prev, { x: dx, y: dy, z: dz }, d, xLo, xHi, hz)) continue;
 
       const t = THREE.MathUtils.clamp(dy < -1e-5 ? (d.y - prev.y) / dy : t1, t0, t1);
       return {
@@ -277,7 +425,7 @@ class Boat {
         local: new THREE.Vector3(
           THREE.MathUtils.clamp(prev.x + dx * t, d.x0 + 0.1, d.x1 - 0.1),
           d.y + 0.15,
-          THREE.MathUtils.clamp(prev.z + dz * t, -(wid / 2 - 0.2), wid / 2 - 0.2),
+          THREE.MathUtils.clamp(prev.z + dz * t, -(this.beam / 2 - 0.2), this.beam / 2 - 0.2),
         ),
       };
     }
@@ -288,7 +436,6 @@ class Boat {
   collideLocal(pos, vel, radius, prevPos = null) {
     const local = this.group.worldToLocal(pos.clone());
     const prev = prevPos ? this.group.worldToLocal(prevPos.clone()) : local.clone();
-    const { len, wid } = this.dims;
     const falling = vel.y < 0 || local.y < prev.y;
 
     if (falling) {
@@ -302,9 +449,9 @@ class Boat {
       if (over && local.y > over.y) return null;
     }
 
-    const hx = len / 2 + radius, hz = wid / 2 + radius;
+    const hx = this.halfLen + radius, hz = this.beam / 2 + radius;
     if (Math.abs(local.x) > hx || Math.abs(local.z) > hz ||
-        local.y < -0.2 || local.y > this._ceilingAt(local.x)) return null;
+        local.y < this.keelY || local.y > this._ceilingAt(local.x)) return null;
     // otherwise: BOING — push out along the dominant axis
     const px = hx - Math.abs(local.x);
     const pz = hz - Math.abs(local.z);
@@ -321,7 +468,7 @@ class Boat {
 export class Boats {
   constructor(scene) {
     this.boats = [];
-    const mk = (n, rad, yJitter, cx, cz) => {
+    const mk = (n, rad, cx, cz) => {
       const pts = [];
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2;
@@ -330,10 +477,10 @@ export class Boats {
       }
       return pts;
     };
-    this.boats.push(new Boat(scene, "row", mk(7, LAKE_R * 0.55, 0, 0, 8), 2.4, 0));
-    this.boats.push(new Boat(scene, "steam", mk(6, LAKE_R * 0.42, 0, -12, -14), 1.5, 20));
-    this.boats.push(new Boat(scene, "sail", mk(8, LAKE_R * 0.62, 0, 10, -4), 3.9, 45));
-    this.boats.push(new Boat(scene, "row", mk(6, LAKE_R * 0.5, 0, -6, 18), 2.8, 60));
+    this.boats.push(new Boat(scene, "row", mk(7, LAKE_R * 0.55, 0, 8), 2.4, 0));
+    this.boats.push(new Boat(scene, "trawler", mk(6, LAKE_R * 0.42, -12, -14), 1.5, 20));
+    this.boats.push(new Boat(scene, "outboard", mk(8, LAKE_R * 0.62, 10, -4), 3.9, 45));
+    this.boats.push(new Boat(scene, "row", mk(6, LAKE_R * 0.5, -6, 18), 2.8, 60));
   }
 
   update(dt, elapsed, water, particles) {

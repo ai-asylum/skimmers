@@ -2,14 +2,15 @@
  * Smoke-test the throw envelope and the widened playfield without a browser.
  *
  *   • the drag maps onto a launch angle that runs from the flat skipper all the
- *     way up to a mortar, and the steep end really does land with zero skips
+ *     way up to a mortar, and the steep end comes down perpendicular enough to
+ *     skip nothing and go straight under
  *   • every hole's tee, flag and centreline are still water at bed depth, i.e.
  *     the mountain ring gave way to the corridor instead of burying it
  *
  * Run with: node scripts/checkthrow.mjs
  */
 import * as THREE from "three";
-import { simulateThrow, SKIP_ELEV, MAX_ELEV, PLOP_ELEV } from "../src/physics.js";
+import { simulateThrow, SKIP_ELEV, MAX_ELEV, PERP_ANGLE } from "../src/physics.js";
 import { setTerrainPath, terrainHeightAt } from "../src/terrain.js";
 import { setWaterPath, isWaterAt } from "../src/water.js";
 import { HOLES } from "../src/holes.js";
@@ -55,9 +56,9 @@ const mSim = simulateThrow(from, dir, mortar.power, "skip", rock, water, 0, 8, [
 const sSim = simulateThrow(from, dir, skipper.power, "skip", rock, water, 0, 8, [], [], skipper.elev);
 let fail = 0;
 const expect = (ok, msg) => { if (!ok) { console.log(`   !! ${msg}`); fail++; } };
-expect(mortar.elev > PLOP_ELEV, "a full forward push does not clear PLOP_ELEV");
+expect(mortar.elev > PERP_ANGLE, "a full forward push comes down flatter than PERP_ANGLE");
 expect(mSim.skips.length === 0, `a full forward push skipped ${mSim.skips.length} times`);
-expect(mSim.end === "rest", `a full forward push ended '${mSim.end}', not a plop`);
+expect(mSim.end === "sink", `a full forward push ended '${mSim.end}', not a sink`);
 expect(sSim.skips.length >= 4, `a full back pull only chained ${sSim.skips.length} hops`);
 
 // every hole has to be actual water end to end, not a trench through a mountain

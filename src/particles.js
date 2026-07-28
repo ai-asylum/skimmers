@@ -144,6 +144,7 @@ class RingPool {
   }
 
   spawn(x, z, maxScale = 3, dur = 0.9, color = 0xffffff) {
+    if (!this.rings.length) return; // a scene that asked for no ripples
     const r = this.rings[this.head];
     this.head = (this.head + 1) % this.rings.length;
     r.t = 0;
@@ -199,6 +200,7 @@ class FeatherPool {
   }
 
   burst(pos, incomingVel, count = 34) {
+    if (!this.feathers.length) return;
     const hmag = Math.max(0.001, Math.hypot(incomingVel.x, incomingVel.z));
     const fx = incomingVel.x / hmag;
     const fz = incomingVel.z / hmag;
@@ -248,11 +250,16 @@ class FeatherPool {
 
 // ------------------------------------------------------------------ facade
 export class Particles {
-  constructor(scene) {
-    this.spray = new PointPool(scene, 2600, { additive: false, sizeAtten: 110 });
-    this.glow = new PointPool(scene, 1200, { additive: true, sizeAtten: 130 });
-    this.rings = new RingPool(scene, 48);
-    this.feathers = new FeatherPool(scene, 64);
+  /**
+   * Pool sizes are worth naming for the small scenes that borrow this system —
+   * the garage's trail previews (cosmeticpreview.js) want a lot of glow and no
+   * ripples or feathers at all.
+   */
+  constructor(scene, { spray = 2600, glow = 1200, rings = 48, feathers = 64 } = {}) {
+    this.spray = new PointPool(scene, spray, { additive: false, sizeAtten: 110 });
+    this.glow = new PointPool(scene, glow, { additive: true, sizeAtten: 130 });
+    this.rings = new RingPool(scene, rings);
+    this.feathers = new FeatherPool(scene, feathers);
     this._tmpC = new THREE.Color();
   }
 
@@ -472,7 +479,12 @@ export class Particles {
     this.rings.spawn(x, z, 0.7, 0.8);
   }
 
-  /** steamboat stack puff — soft gray, rises and drifts */
+  /** prop wash off a motorboat's transom — wider and slower than an oar dip */
+  wake(x, z) {
+    this.rings.spawn(x, z, 1.3, 1.2);
+  }
+
+  /** boat funnel puff — soft gray, rises and drifts */
   smoke(pos) {
     const g = 0.62 + Math.random() * 0.18;
     this.spray.emit(

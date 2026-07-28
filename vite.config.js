@@ -21,5 +21,7 @@ export default defineConfig({
   },
   // host: true binds all interfaces so a phone on the same wifi can load the
   // dev server (needed to test touch controls on real hardware).
-  server: { port: 8741, host: true },
+  // hmr: false — edits never reload the page mid-run, so an in-progress throw
+  // is never interrupted; reload manually to pick up changes.
+  server: { port: 8741, host: true, hmr: false },
 });
