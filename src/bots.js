@@ -23,6 +23,11 @@ const _dir = new THREE.Vector3();
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
+// Global nerf: how much sloppier every bot aims than its skill would suggest.
+// 1 = original difficulty, 3 = roughly "3x less good" (three times the aim
+// error on both heading and power). Bump this to make rivals easier still.
+const AIM_NERF = 3;
+
 export class BotBrain {
   /**
    * `tier` is the difficulty class the player picked (cups.js TIERS). It bends
@@ -136,7 +141,7 @@ export class BotBrain {
         }
       }
     }
-    const wob = (1 - this.skill) * 0.12; // steadier than usual — just get out
+    const wob = (1 - this.skill) * 0.12 * AIM_NERF; // steadier than usual — just get out
     const th = bestTh + (Math.random() - 0.5) * wob;
     _dir.set(Math.cos(th), 0, Math.sin(th));
     s.throwRock(_dir, bestPw, bestMode);
@@ -197,7 +202,7 @@ export class BotBrain {
     }
 
     // skill-scaled sloppiness
-    const wob = (1 - this.skill) * 0.19;
+    const wob = (1 - this.skill) * 0.19 * AIM_NERF;
     const ang = (Math.random() - 0.5) * 2 * wob;
     const cos = Math.cos(ang), sin = Math.sin(ang);
     const dx = _dir.x * cos - _dir.z * sin;
