@@ -102,8 +102,11 @@ const IS_PLAYABLE_SKIP = typeof __PLAYABLE_SKIP__ !== "undefined" && !!__PLAYABL
 const IS_PLAYABLE_CRAFT = typeof __PLAYABLE_CRAFT__ !== "undefined" && !!__PLAYABLE_CRAFT__;
 // Shared "we're inside an ad" flag: skips meta/analytics/title bootstrapping.
 const IS_PLAYABLE = IS_PLAYABLE_SKIP || IS_PLAYABLE_CRAFT;
-// Debug scene-colour tweak menu (press `). Dev tool only — kept out of ads.
-if (!IS_PLAYABLE) initTweakMenu({ scene, world, water });
+// Debug scene-colour tweak menu (press `). Dev tool only — kept out of ads and
+// only wired up when served locally, never in production.
+const IS_LOCALHOST = /^(localhost|127\.0\.0\.1|\[?::1\]?|.*\.local)$/i.test(location.hostname)
+  || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname);
+if (!IS_PLAYABLE && IS_LOCALHOST) initTweakMenu({ scene, world, water });
 if (IS_PLAYABLE_SKIP) {
   HOLES.length = 0;
   HOLES.push({

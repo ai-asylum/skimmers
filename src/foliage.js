@@ -23,6 +23,21 @@ import { terrainSampleAt } from "./terrain.js";
 
 const swayTime = { value: 0 };
 
+// Deterministic scatter: a seeded PRNG (reset per setHole) instead of
+// Math.random, so the forest/undergrowth land in the same spots every time a
+// hole — the bench/title lake included — is (re)built. Distinct seeds keep the
+// trees, undergrowth and grass from correlating onto the same sample stream.
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const SEED_TREES = 0x5eed7 + 11;
+const SEED_FOLIAGE = 0x5eed7 + 47;
+
 /** drive the wind clock — World.update calls this once a frame */
 export function updateWind(elapsed) { swayTime.value = elapsed; }
 
@@ -136,13 +151,13 @@ class Scatter {
   }
 
   /** `tilt` is how far off upright it may lean. @returns false when full */
-  place(kindIndex, x, y, z, height, tilt = 0) {
+  place(kindIndex, x, y, z, height, tilt = 0, rand = Math.random) {
     const mesh = this.meshes[kindIndex];
     if (mesh.count >= this.cap) return false;
-    const lean = () => (Math.random() - 0.5) * tilt;
+    const lean = () => (rand() - 0.5) * tilt;
     const o = this._o;
     o.position.set(x, y, z);
-    o.rotation.set(lean(), Math.random() * Math.PI * 2, lean());
+    o.rotation.set(lean(), rand() * Math.PI * 2, lean());
     o.scale.setScalar(height);
     o.updateMatrix();
     mesh.setMatrixAt(mesh.count++, o.matrix);
@@ -154,10 +169,10 @@ class Scatter {
 }
 
 /** weighted pick over entries carrying a `weight`, restricted to `eligible` */
-function pickWeighted(entries, eligible) {
+function pickWeighted(entries, eligible, rand = Math.random) {
   let total = 0;
   for (const i of eligible) total += entries[i].weight;
-  let r = Math.random() * total;
+  let r = rand() * total;
   for (const i of eligible) {
     r -= entries[i].weight;
     if (r <= 0) return i;
@@ -256,12 +271,13 @@ export class Trees {
   /** re-plant the forest on the grassy banks of the current hole */
   setHole() {
     this.scatter.clear();
+    const rand = mulberry32(SEED_TREES);
     const maxR = LAKE_R * 1.9; // out to the far ends of a corner-to-corner hole
     let placed = 0, guard = 0;
     const eligible = [];
     while (placed < this.total && guard++ < 8000) {
-      const a = Math.random() * Math.PI * 2;
-      const r = Math.sqrt(Math.random()) * maxR;
+      const a = rand() * Math.PI * 2;
+      const r = Math.sqrt(rand()) * maxR;
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
       const { y, kind } = terrainSampleAt(x, z);
       if (kind !== "grass") continue; // never on the bed or the beach shelf
@@ -271,9 +287,9 @@ export class Trees {
         if (y >= band[0] && y <= band[1]) eligible.push(i);
       }
       if (!eligible.length) continue; // below the shoreline or up on the peaks
-      const i = pickWeighted(TREE_SPECIES, eligible);
+      const i = pickWeighted(TREE_SPECIES, eligible, rand);
       const [lo, hi] = TREE_SPECIES[i].h;
-      if (this.scatter.place(i, x, y, z, lo + Math.random() * (hi - lo), 0.09)) placed++;
+      if (this.scatter.place(i, x, y, z, lo + rand() * (hi - lo), 0.09, rand)) placed++;
     }
     this.scatter.commit();
   }
@@ -309,12 +325,13 @@ export class Foliage {
   /** re-scatter the undergrowth over the banks of the current hole */
   setHole() {
     this.scatter.clear();
+    const rand = mulberry32(SEED_FOLIAGE);
     const maxR = LAKE_R * 1.8;
     let placed = 0, guard = 0;
     const eligible = [];
     while (placed < this.total && guard++ < this.total * 12) {
-      const a = Math.random() * Math.PI * 2;
-      const r = Math.sqrt(Math.random()) * maxR;
+      const a = rand() * Math.PI * 2;
+      const r = Math.sqrt(rand()) * maxR;
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
       const { y, kind } = terrainSampleAt(x, z);
       if (kind === "bed") continue;
@@ -325,14 +342,14 @@ export class Foliage {
         if (y >= p.y[0] && y <= p.y[1]) eligible.push(i);
       }
       if (!eligible.length) continue;
-      const i = pickWeighted(PROPS, eligible);
+      const i = pickWeighted(PROPS, eligible, rand);
       const p = PROPS[i];
-      const h = p.h[0] + Math.random() * (p.h[1] - p.h[0]);
+      const h = p.h[0] + rand() * (p.h[1] - p.h[0]);
       // Boulders and logs sit at any angle and sink a little into the ground;
       // plants stand up straight out of it.
       const tilt = p.sway ? 0.1 : 0.5;
       const sink = p.sway ? 0 : -h * 0.12;
-      if (this.scatter.place(i, x, y + sink, z, h, tilt)) placed++;
+      if (this.scatter.place(i, x, y + sink, z, h, tilt, rand)) placed++;
     }
     this.scatter.commit();
   }

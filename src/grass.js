@@ -13,6 +13,18 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { LAKE_R } from "./water.js";
 import { terrainSampleAt } from "./terrain.js";
 
+// Deterministic scatter (see foliage.js): a seeded PRNG reset each setHole so
+// the meadow lands in the same spots every rebuild, bench/title lake included.
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const SEED_GRASS = 0x5eed7 + 83;
+
 const BLADE_ROOT_FACTOR = 0.45;
 
 function makeBladeGeometry(height, width) {
@@ -96,21 +108,22 @@ uniform float uTime; uniform float uWind; uniform float uWindSpeed; uniform vec2
   /** re-scatter blades over the grassy banks of the current hole */
   setHole() {
     const dummy = this._dummy;
+    const rand = mulberry32(SEED_GRASS);
     // reaches the far ends of a corner-to-corner hole without running out onto
     // the peaks (terrain.js holds the mountain ring back around the channel)
     const maxR = LAKE_R * 1.7;
     let placed = 0, guard = 0;
     while (placed < this.cap && guard++ < this.cap * 8) {
-      const a = Math.random() * Math.PI * 2;
-      const rr = Math.sqrt(Math.random()) * maxR;
+      const a = rand() * Math.PI * 2;
+      const rr = Math.sqrt(rand()) * maxR;
       const x = Math.cos(a) * rr, z = Math.sin(a) * rr;
       const { y, kind } = terrainSampleAt(x, z);
       if (kind !== "grass") continue;
       if (y < 0.05 || y > 17) continue; // skip beach/water and the bare rocky crests
-      const s = 0.7 + Math.random() * 0.7;
+      const s = 0.7 + rand() * 0.7;
       dummy.position.set(x, y, z);
-      dummy.rotation.set(0, Math.random() * Math.PI * 2, 0);
-      dummy.scale.set(0.9 + Math.random() * 0.3, s, 0.9 + Math.random() * 0.3);
+      dummy.rotation.set(0, rand() * Math.PI * 2, 0);
+      dummy.scale.set(0.9 + rand() * 0.3, s, 0.9 + rand() * 0.3);
       dummy.updateMatrix();
       this.mesh.setMatrixAt(placed++, dummy.matrix);
     }
