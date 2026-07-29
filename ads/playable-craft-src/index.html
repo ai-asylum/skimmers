@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Skippidy Skip — Make a Rock</title>
+<!-- MRAID: injected by the ad container at runtime (harmless if absent in a plain preview). -->
+<script src="mraid.js"></script>
+<meta name="theme-color" content="#0a2a3d">
+<!-- Baloo 2 from the CDN (self-hosted @font-face can't be inlined into a single-file ad). -->
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@400..800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #16324a;
+    --paper: #fdf6e3;
+    --accent: #ff8a3d;
+    --accent2: #37c8e0;
+    --gold: #ffd24a;
+    --danger: #ff5470;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a2a3d; }
+  /* No `cursive` in the fallback chain: phones have neither Trebuchet nor Comic
+     Sans, and iOS maps cursive to Snell Roundhand — a thin script that wrecks the
+     chunky cartoon look. system-ui is the safe landing spot if Baloo 2 fails. */
+  body { font-family: "Baloo 2", "Trebuchet MS", system-ui, sans-serif; color: var(--ink); }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+
+  /* ---------- generic layers ---------- */
+  .layer { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  .clickable { pointer-events: auto; }
+  .hidden { display: none !important; }
+
+  /* ---------- big cartoon text ---------- */
+  /* Baloo 2 is a variable font, so its glyphs keep overlapping contours (T is 3
+     paths, I is 2) — removing them would break weight interpolation. A filled
+     glyph hides that, but -webkit-text-stroke inks every contour edge, including
+     the ones buried inside a join, which slashes ink lines across the letters.
+     `paint-order: stroke fill` puts the stroke under the fill so those inner
+     edges get covered. It also means only half the stroke stays visible, hence
+     the doubled widths on every stroked rule below. */
+  .bigtitle {
+    font-size: clamp(48px, 11vw, 130px);
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    color: var(--paper);
+    -webkit-text-stroke: 6px var(--ink);
+    paint-order: stroke fill;
+    text-shadow: 0 6px 0 var(--ink), 0 10px 24px rgba(0,0,0,0.4);
+    transform: rotate(-3deg);
+  }
+
+  /* ---------- title screen ---------- */
+  #title-screen {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; z-index: 40; pointer-events: auto;
+    background: radial-gradient(ellipse at 50% 120%, rgba(20,90,120,0.25), transparent 60%);
+  }
+  #game-logo {
+    width: clamp(300px, 72vw, 640px); height: auto;
+    filter: drop-shadow(0 12px 22px rgba(0,0,0,0.45));
+    transform: rotate(-3deg);
+    animation: logoBob 3.2s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes logoBob {
+    0%, 100% { transform: rotate(-3deg) translateY(0); }
+    50%      { transform: rotate(-3deg) translateY(-10px); }
+  }
+  #title-screen .sub {
+    font-size: clamp(14px, 2.4vw, 22px); color: var(--paper); font-weight: 700;
+    text-shadow: 0 2px 0 rgba(0,0,0,0.5); letter-spacing: 0.12em; text-transform: uppercase;
+  }
+  .btn {
+    pointer-events: auto; cursor: pointer; border: none;
+    font-family: inherit; font-weight: 900; letter-spacing: 0.06em;
+    font-size: clamp(18px, 3vw, 28px); color: var(--ink);
+    background: var(--gold);
+    padding: 16px 44px; border-radius: 60px;
+    box-shadow: 0 6px 0 #c99a1d, 0 12px 24px rgba(0,0,0,0.35);
+    transition: transform 0.08s ease, box-shadow 0.08s ease;
+    text-transform: uppercase;
+  }
+  .btn:hover { transform: translateY(-2px) scale(1.04) rotate(-1deg); }
+  .btn:active { transform: translateY(4px); box-shadow: 0 2px 0 #c99a1d, 0 4px 10px rgba(0,0,0,0.35); }
+  .btn.small { font-size: 16px; padding: 10px 24px; box-shadow: 0 4px 0 #c99a1d, 0 8px 14px rgba(0,0,0,0.3); }
+  .btn.blue { background: var(--accent2); box-shadow: 0 6px 0 #1d8fa3, 0 12px 24px rgba(0,0,0,0.35); }
+  .btn.blue:active { box-shadow: 0 2px 0 #1d8fa3, 0 4px 10px rgba(0,0,0,0.35); }
+
+  /* ---------- phase header (find/shape/paint) ---------- */
+  #phase-ui { z-index: 30; display: flex; flex-direction: column; align-items: center; }
+  #phase-title {
+    margin-top: 4vh;
+    font-size: clamp(34px, 7.4vw, 72px); font-weight: 900; color: var(--paper);
+    -webkit-text-stroke: 4px var(--ink);
+    paint-order: stroke fill;
+    text-shadow: 0 5px 0 var(--ink), 0 9px 20px rgba(0,0,0,0.35);
+    transform: rotate(-2deg);
+  }
+  /* one step back out of whatever phase you're in, parked opposite the muter */
+  #phase-back {
+    position: absolute;
+    top: max(12px, env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left));
+    width: 48px; height: 48px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px; line-height: 1; border-radius: 50%;
+  }
+  #phase-bottom {
+    position: absolute; left: 0; right: 0;
+    bottom: max(12px, calc(3vh + env(safe-area-inset-bottom)));
+    padding: 0 10px;
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+  }
+
+  /* stat bars for the rock */
+  #rock-stats { display: flex; gap: 18px; background: rgba(253,246,227,0.92); padding: 12px 20px; border-radius: 18px;
+    box-shadow: 0 4px 0 rgba(22,50,74,0.6), 0 10px 20px rgba(0,0,0,0.3); }
+  .stat { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 90px; }
+  .stat label { font-size: 12px; font-weight: 900; letter-spacing: 0.1em; }
+  .stat .bar { width: 100%; height: 12px; background: #d8ccb1; border-radius: 6px; overflow: hidden; border: 2px solid var(--ink); }
+  .stat .bar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.15s ease; }
+  .stat.flat .bar i { background: var(--accent2); }
+  .stat.grit .bar i { background: var(--gold); }
+
+  #phase-buttons { display: flex; gap: 10px; align-items: center; justify-content: center; }
+
+  /* ---------- rock shelf: name plates floating over the bench slots ---------- */
+  #shelf-tags { z-index: 24; }
+  .rock-tag {
+    position: absolute; transform: translate(-50%, -50%);
+    pointer-events: auto; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 1px;
+    padding: 7px 15px; border-radius: 15px; white-space: nowrap;
+    background: var(--paper); color: var(--ink);
+    font-weight: 900; font-size: 15px;
+    border: 2.5px solid var(--ink);
+    box-shadow: 0 4px 0 rgba(22,50,74,0.5), 0 8px 16px rgba(0,0,0,0.3);
+    transition: transform 0.1s ease, background 0.15s ease;
+  }
+  .rock-tag .sub { font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.65; }
+  .rock-tag:hover { transform: translate(-50%, -50%) translateY(-3px) scale(1.05); }
+  .rock-tag.sel { background: var(--gold); transform: translate(-50%, -50%) translateY(-4px) scale(1.07); }
+
+  /* An empty floater says "tap me" with a finger instead of a caption: the
+     fingertip sits on the anchor point (it's 20%/10% into the sprite) and the
+     hand pokes along its own axis. */
+  #tap-hand {
+    position: fixed; z-index: 25; pointer-events: none;
+    width: clamp(52px, 9.5vw, 92px); height: auto;
+    transform-origin: 20% 10%;
+    filter:
+      drop-shadow(2px 0 0 var(--ink)) drop-shadow(-2px 0 0 var(--ink))
+      drop-shadow(0 2px 0 var(--ink)) drop-shadow(0 -2px 0 var(--ink))
+      drop-shadow(0 8px 12px rgba(0,0,0,0.45));
+    animation: tapPoke 1.5s ease-in-out infinite;
+  }
+  @keyframes tapPoke {
+    0%, 70%, 100% { transform: translate(-20%, -10%) scale(1); }
+    82%           { transform: translate(-13%, -1%) scale(0.93); }
+  }
+
+  /* ---------- name your rock ---------- */
+  #name-ui {
+    display: flex; align-items: center; gap: 10px; pointer-events: auto;
+    background: rgba(253,246,227,0.94); padding: 10px 12px; border-radius: 20px;
+    box-shadow: 0 4px 0 rgba(22,50,74,0.6), 0 10px 20px rgba(0,0,0,0.3);
+  }
+  #name-input {
+    font-family: inherit; font-weight: 900; font-size: 18px; color: var(--ink);
+    border: 2.5px solid var(--ink); border-radius: 12px; padding: 8px 12px;
+    width: min(54vw, 250px); background: #fff; user-select: text; -webkit-user-select: text;
+  }
+  #name-input:focus { outline: 3px solid var(--gold); }
+  .btn.danger { background: var(--danger); box-shadow: 0 4px 0 #b93a52, 0 8px 14px rgba(0,0,0,0.3); }
+  .btn.danger:active { box-shadow: 0 2px 0 #b93a52, 0 4px 10px rgba(0,0,0,0.35); }
+  /* letting a rock go is a side door, not the main one — say it quietly */
+  #shelf-release { font-size: 13px; padding: 7px 18px; opacity: 0.92; }
+
+  /* ---------- paint booth, Snapchat style ----------
+     No palette panel: the stone keeps the whole screen and the tools hug the
+     edges. Hue strip under the right thumb, pen thickness under the left,
+     pattern stamps along the bottom. */
+  #paint-ui { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+
+  /* both strips are fixed to the viewport, so they sit outside the bottom
+     column's flow while still hiding along with the rest of the paint UI */
+  .paint-slider {
+    position: fixed; top: 50%; transform: translateY(-50%);
+    pointer-events: auto; touch-action: none; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .paint-slider:focus-visible { outline: none; }
+  /* a thumb-sized grab area around a deliberately hairline visual */
+  .paint-slider::before { content: ""; position: absolute; inset: -20px -18px; }
+  .paint-knob {
+    position: absolute; left: 50%; top: 0; border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    transform: translate(-50%, -50%);
+    transition: transform 0.12s ease, width 0.1s ease, height 0.1s ease;
+    pointer-events: none;
+  }
+
+  /* right edge: white at the top, black at the foot, spectrum between. The
+     keyline keeps the pale end of the strip off a pale lake. */
+  #color-bar {
+    right: max(12px, env(safe-area-inset-right));
+    width: 13px; height: min(58vh, 420px); border-radius: 7px;
+    box-shadow: 0 0 0 1.5px rgba(0,0,0,0.32), 0 2px 10px rgba(0,0,0,0.45),
+                inset 0 0 0 1px rgba(255,255,255,0.5);
+  }
+  #color-knob { width: 24px; height: 24px; border: 3px solid #fff; }
+  /* while dragging, the knob swells and steps aside so the thumb isn't on top */
+  #color-bar.grab #color-knob { transform: translate(-50%, -50%) translateX(-40px) scale(1.9); }
+
+  /* left edge: the wedge reads as thickness, fat end up. The tight shadow is
+     doing the job of an outline, which clip-path would otherwise cut away, and
+     without it the wedge reads as one of the lake's wooden posts. */
+  #size-bar {
+    left: max(12px, env(safe-area-inset-left));
+    width: 24px; height: min(34vh, 240px);
+    filter: drop-shadow(0 0 1.5px rgba(0,0,0,0.85)) drop-shadow(0 2px 6px rgba(0,0,0,0.45));
+  }
+  #size-wedge {
+    position: absolute; inset: 0; background: rgba(255,255,255,0.62);
+    clip-path: polygon(0% 0%, 100% 0%, 63% 100%, 37% 100%);
+    pointer-events: none;
+  }
+  #size-knob { border: 2.5px solid #fff; }
+  #size-bar.grab #size-knob { transform: translate(-50%, -50%) translateX(40px); }
+
+  /* bottom: pattern stamps as dark glass pills. They wrap rather than scroll,
+     so a narrow screen never shows a half-cut pill. */
+  #patterns {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+    padding: 4px 2px; max-width: min(760px, 92vw); pointer-events: auto;
+  }
+  .pattern-chip {
+    flex: 0 0 auto; padding: 9px 16px; border-radius: 999px;
+    background: rgba(10,16,24,0.42); backdrop-filter: blur(8px);
+    border: 1.5px solid rgba(255,255,255,0.4); color: #fff;
+    font-weight: 800; font-size: 12.5px; letter-spacing: 0.08em;
+    text-transform: uppercase; white-space: nowrap; cursor: pointer;
+    transition: transform 0.1s ease, background 0.15s ease, color 0.15s ease;
+  }
+  .pattern-chip:hover { transform: translateY(-2px); }
+  .pattern-chip.sel { background: #fff; color: #12212f; border-color: #fff; }
+
+  /* ---------- race HUD ---------- */
+  #race-hud { z-index: 20; }
+
+  /* minimap — lives top-right where the scoreboard used to be. Small enough to
+     stay out of the way of the throw, tap it to read the hole properly. */
+  #minimap {
+    position: absolute; right: 14px; top: 64px;
+    width: 76px; height: 76px;
+    border-radius: 50%; border: 2px solid rgba(253,246,227,0.55);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    background: rgba(10,42,61,0.5);
+    pointer-events: auto; cursor: pointer;
+    transition: width 0.18s ease, height 0.18s ease, border-width 0.18s ease;
+  }
+  #minimap.big {
+    width: 160px; height: 160px;
+    border-width: 3px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+  }
+
+  /* who's in the hole, in the order they got there. Sits under the minimap and
+     grows downward as the field comes in; drops further when the map is opened. */
+  #finishers {
+    position: absolute; right: 14px; top: 150px;
+    display: flex; flex-direction: column; align-items: flex-end; gap: 5px;
+    transition: top 0.18s ease;
+  }
+  #minimap.big ~ #finishers { top: 234px; }
+  .fin-row {
+    display: flex; align-items: center; gap: 7px;
+    padding: 4px 10px 4px 8px; border-radius: 13px;
+    background: rgba(10,42,61,0.62); color: var(--paper);
+    font-size: 13px; font-weight: 800; white-space: nowrap;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.7);
+    animation: finIn 0.4s cubic-bezier(0.18, 1.4, 0.4, 1) both;
+  }
+  .fin-row.me { background: var(--gold); color: var(--ink); text-shadow: none; }
+  .fin-row .medal { font-size: 17px; line-height: 1; min-width: 20px; text-align: center; }
+  .fin-row .dot { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid rgba(0,0,0,0.45); }
+  @keyframes finIn { 0% { transform: translateX(40px) scale(0.85); opacity: 0; } 100% { opacity: 1; } }
+
+  /* final-stretch countdown — only up once a stone is in the hole */
+  #hole-timer {
+    position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 1px;
+    padding: 5px 16px 6px; border-radius: 14px;
+    background: rgba(10,42,61,0.62); color: var(--paper);
+    text-shadow: 0 2px 4px rgba(0,0,0,0.7);
+  }
+  #hole-timer .lbl { font-size: 10px; font-weight: 800; letter-spacing: 0.12em; opacity: 0.75; }
+  #hole-timer-val { font-size: 24px; font-weight: 900; font-variant-numeric: tabular-nums; line-height: 1; }
+  /* last ten seconds: red and pulsing */
+  #hole-timer.urgent { background: rgba(255,84,112,0.85); }
+  #hole-timer.urgent #hole-timer-val { animation: tick 1s steps(1, end) infinite; }
+  @keyframes tick { 0%, 60% { opacity: 1; } 61%, 100% { opacity: 0.45; } }
+
+  /* combo popups + floating text */
+  #popups { z-index: 25; overflow: hidden; }
+  .popup {
+    position: absolute; font-weight: 900; white-space: nowrap;
+    -webkit-text-stroke: 3px var(--ink);
+    paint-order: stroke fill;
+    text-shadow: 0 3px 0 var(--ink), 0 6px 14px rgba(0,0,0,0.4);
+    transform: translate(-50%, -50%);
+    animation: popfloat 1.1s ease-out forwards;
+    will-change: transform, opacity;
+  }
+  @keyframes popfloat {
+    0%   { transform: translate(-50%,-50%) scale(0.2) rotate(var(--rot)); opacity: 0; }
+    12%  { transform: translate(-50%,-60%) scale(1.25) rotate(var(--rot)); opacity: 1; }
+    24%  { transform: translate(-50%,-64%) scale(1.0) rotate(var(--rot)); }
+    75%  { opacity: 1; }
+    100% { transform: translate(-50%,-160%) scale(1.02) rotate(var(--rot)); opacity: 0; }
+  }
+
+  /* center banners */
+  #banner {
+    position: absolute; top: 26%; left: 50%; transform: translateX(-50%);
+    text-align: center; z-index: 26; pointer-events: none;
+  }
+  .banner-text {
+    font-size: clamp(34px, 8vw, 84px); font-weight: 900; color: var(--gold);
+    -webkit-text-stroke: 5px var(--ink);
+    paint-order: stroke fill;
+    text-shadow: 0 5px 0 var(--ink), 0 10px 24px rgba(0,0,0,0.45);
+    animation: bannerIn 0.45s cubic-bezier(0.18, 1.6, 0.4, 1) both;
+    transform-origin: 50% 50%;
+  }
+  .banner-sub {
+    font-size: clamp(14px, 2.6vw, 24px); font-weight: 800; color: var(--paper);
+    text-shadow: 0 2px 6px rgba(0,0,0,0.7); margin-top: 4px;
+    animation: bannerIn 0.5s 0.08s cubic-bezier(0.18, 1.6, 0.4, 1) both;
+  }
+  @keyframes bannerIn {
+    0% { transform: scale(0) rotate(-10deg); opacity: 0; }
+    100% { transform: scale(1) rotate(-2deg); opacity: 1; }
+  }
+  .banner-out { animation: bannerOut 0.3s ease-in both !important; }
+  @keyframes bannerOut { to { transform: scale(0.6) rotate(4deg); opacity: 0; } }
+
+  /* ---------- fishing minigame ---------- */
+  #fishing-ui {
+    z-index: 32; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+    padding-top: 9vh;
+  }
+  #fishing-hint { margin-top: 4px; font-weight: 800; color: var(--paper); text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+    background: rgba(10,42,61,0.55); padding: 5px 16px; border-radius: 16px; }
+
+  /* ---------- results podium ---------- */
+  #results-ui {
+    z-index: 45; display: flex; flex-direction: column; align-items: center; gap: 16px;
+    background: rgba(6,26,40,0.55); backdrop-filter: blur(3px); pointer-events: auto;
+    /* eight racers plus a shell tally is taller than a landscape phone, so the
+       board scrolls — `safe` keeps the top row reachable once it does */
+    justify-content: safe center; overflow-y: auto; padding: 3vh 12px;
+  }
+  /* standings and tally sit side by side, so neither shoves the other off */
+  #results-body { display: flex; align-items: flex-start; justify-content: center; gap: 18px; flex-wrap: wrap; }
+  #results-list { display: flex; flex-direction: column; gap: 8px; min-width: min(80vw, 420px); }
+  #results-btns { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  /* short screens: shrink the podium furniture rather than lose the buttons */
+  @media (max-height: 760px) {
+    #results-ui { gap: 10px; }
+    #results-title { font-size: clamp(26px, 5vw, 44px) !important; }
+    #results-list { gap: 5px; min-width: min(60vw, 360px); }
+    .result-row { padding: 6px 14px; }
+  }
+  .result-row {
+    display: flex; align-items: center; gap: 14px; background: var(--paper);
+    padding: 10px 18px; border-radius: 16px; font-weight: 900;
+    box-shadow: 0 4px 0 rgba(0,0,0,0.35);
+    animation: rowIn 0.4s cubic-bezier(0.18, 1.4, 0.4, 1) both;
+  }
+  .result-row.first { background: var(--gold); transform: scale(1.06); font-size: 1.1em; }
+  .result-row .place { font-size: 22px; width: 40px; }
+  .result-row .dot { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid var(--ink); }
+  .result-row .rname { flex: 1; }
+  .result-row .pts { font-size: 19px; font-variant-numeric: tabular-nums; }
+  @keyframes rowIn { 0% { transform: translateX(-60px) scale(0.8); opacity: 0; } 100% { opacity: 1; } }
+
+  /* ---------- title menu (solo / multiplayer) ---------- */
+  .menu-view { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .menu-label {
+    font-size: clamp(13px, 2vw, 17px); font-weight: 900; letter-spacing: 0.14em;
+    color: var(--paper); text-shadow: 0 2px 4px rgba(0,0,0,0.6); text-transform: uppercase;
+  }
+  #room-sizes { display: flex; gap: 10px; }
+  .size-chip {
+    width: 58px; height: 58px; border-radius: 16px; border: 3px solid var(--ink);
+    background: var(--paper); color: var(--ink); font-family: inherit; font-weight: 900;
+    font-size: 26px; cursor: pointer; pointer-events: auto;
+    box-shadow: 0 4px 0 rgba(22,50,74,0.55); transition: transform 0.1s ease, background 0.1s ease;
+  }
+  .size-chip:hover { transform: translateY(-2px) scale(1.05); }
+  .size-chip.sel { background: var(--gold); transform: translateY(-2px) scale(1.08); }
+  #mp-actions { display: flex; gap: 12px; align-items: center; }
+
+  /* ---------- multiplayer lobby ---------- */
+  #net-status { min-height: 22px; font-weight: 800; color: var(--gold);
+    text-shadow: 0 2px 4px rgba(0,0,0,0.6); font-size: 15px; }
+  #lobby-panel {
+    position: fixed; top: 14px; left: 14px; z-index: 35;
+    background: rgba(10,42,61,0.8); border: 2px solid rgba(253,246,227,0.3);
+    border-radius: 16px; padding: 12px 16px; color: var(--paper);
+    display: flex; flex-direction: column; gap: 8px; min-width: 190px;
+    backdrop-filter: blur(4px); pointer-events: auto;
+  }
+  #lobby-code { font-weight: 900; font-size: 20px; letter-spacing: 0.18em; color: var(--gold); }
+  #lobby-list { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 700; }
+  #lobby-list .lp { display: flex; align-items: center; gap: 7px; }
+  #lobby-list .lp .dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.6); }
+  #lobby-hint { font-size: 11px; opacity: 0.75; max-width: 190px; }
+
+  /* ---------- killcam letterbox ---------- */
+  #letterbox { z-index: 27; }
+  #letterbox .bar { position: absolute; left: 0; right: 0; height: 0; background: #0a1622; transition: height 0.45s cubic-bezier(0.7,0,0.3,1); }
+  #letterbox .bar.top { top: 0; }
+  #letterbox .bar.bot { bottom: 0; }
+  #letterbox.on .bar { height: 11vh; }
+  #replay-tag {
+    position: absolute; top: calc(11vh + 14px); left: 22px;
+    font-weight: 900; font-size: 18px; letter-spacing: 0.12em; color: #ff5470;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.6); opacity: 0;
+  }
+  #letterbox.on #replay-tag { opacity: 1; animation: recblink 1s steps(2) infinite; }
+  @keyframes recblink { 50% { opacity: 0.25; } }
+
+  /* ---------- transition wipe ---------- */
+  #wipe { z-index: 60; background: var(--ink); transform: scaleY(0); transform-origin: 50% 0%; transition: transform 0.35s cubic-bezier(0.7,0,0.3,1); }
+  #wipe.on { transform: scaleY(1); }
+
+  /* vignette + subtle grade */
+  #vignette { z-index: 5; background: radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(6,22,36,0.42) 100%); }
+
+  /* underwater grade: deep blue tint + canvas wobble while the camera is submerged */
+  #underwater-tint {
+    z-index: 6; opacity: 0; transition: opacity 0.15s ease-out;
+    background: radial-gradient(ellipse at 50% 35%, rgba(10,60,110,0.28) 0%, rgba(4,24,52,0.6) 100%);
+  }
+  body.underwater #underwater-tint { opacity: 1; }
+  body.underwater #c { filter: url(#underwaterFilter) saturate(1.15) brightness(0.92); }
+
+  /* flash */
+  #flash { z-index: 28; opacity: 0; background: #fff; transition: opacity 0.25s ease-out; }
+
+  #muter { position: fixed; top: 12px; right: 12px; z-index: 50; background: rgba(10,42,61,0.6);
+    border: 2px solid rgba(253,246,227,0.3); color: var(--paper); width: 42px; height: 42px;
+    border-radius: 50%; cursor: pointer; pointer-events: auto;
+    display: flex; align-items: center; justify-content: center; }
+  #muter svg { width: 20px; height: 20px; }
+  #muter.muted { opacity: 0.6; }
+
+  /* ---------- the career: shells, garage, cup select ----------
+     One visual language for all three: cream paper panels on a dark scrim, the
+     same chunky ink outline and 4px drop the rock stats and name plates use, so
+     the meta screens read as part of the same lakeside furniture rather than a
+     store bolted onto the game. */
+  #shell-hud {
+    position: fixed; top: 12px; left: 14px; z-index: 46; pointer-events: none;
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(253,246,227,0.94); color: var(--ink);
+    padding: 7px 16px 7px 12px; border-radius: 999px;
+    border: 3px solid var(--ink); font-weight: 900; font-size: 20px;
+    box-shadow: 0 4px 0 rgba(22,50,74,0.55), 0 8px 16px rgba(0,0,0,0.3);
+  }
+  #shell-hud .ico { font-size: 20px; }
+  #shell-hud.punch { animation: shellPunch 0.45s cubic-bezier(0.2,1.6,0.4,1); }
+  @keyframes shellPunch {
+    0% { transform: scale(1); }
+    35% { transform: scale(1.22) rotate(-3deg); background: var(--gold); }
+    100% { transform: scale(1); }
+  }
+
+  .meta-scrim {
+    z-index: 44; pointer-events: auto;
+    background: rgba(6,26,40,0.62); backdrop-filter: blur(5px);
+    display: flex; align-items: center; justify-content: center; padding: 2vh 2vw;
+  }
+  .meta-panel {
+    width: min(940px, 96vw); max-height: 96vh; overflow: hidden;
+    display: flex; flex-direction: column; gap: 10px;
+    background: var(--paper); border: 4px solid var(--ink); border-radius: 26px;
+    padding: 16px 18px; box-shadow: 0 8px 0 rgba(22,50,74,0.55), 0 22px 44px rgba(0,0,0,0.45);
+  }
+  .meta-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .meta-title {
+    font-size: clamp(24px, 4.2vw, 38px); font-weight: 900; letter-spacing: 0.03em;
+    text-transform: uppercase; transform: rotate(-1.5deg);
+  }
+  .meta-sub { font-weight: 800; font-size: 15px; opacity: 0.62; }
+  .meta-head .btn { margin-left: auto; }
+  .meta-label {
+    font-size: 12px; font-weight: 900; letter-spacing: 0.16em;
+    text-transform: uppercase; opacity: 0.55; margin-top: 2px;
+  }
+
+  /* the two upgrade sockets */
+  #garage-sockets { display: flex; gap: 10px; }
+  .socket {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px;
+    padding: 9px 10px; border-radius: 16px; cursor: default;
+    border: 3px dashed rgba(22,50,74,0.35); background: rgba(22,50,74,0.05);
+  }
+  .socket.full {
+    cursor: pointer; border-style: solid; border-color: var(--ink);
+    background: var(--gold); box-shadow: 0 4px 0 rgba(22,50,74,0.45);
+  }
+  .socket.full:hover { transform: translateY(-2px); }
+  .socket .ico { font-size: 24px; line-height: 1.1; }
+  .socket .nm { font-weight: 900; font-size: 15px; }
+  .socket .rm { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.55; }
+
+  /* tabs */
+  .meta-tabs { display: flex; gap: 7px; flex-wrap: wrap; }
+  .meta-tab {
+    font-family: inherit; font-weight: 900; font-size: 14px; cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border-radius: 999px; color: var(--ink);
+    border: 3px solid var(--ink); background: #fff;
+    box-shadow: 0 3px 0 rgba(22,50,74,0.4);
+  }
+  .meta-tab.sel { background: var(--accent2); }
+  .meta-tab:hover { transform: translateY(-2px); }
+
+  /* the card grid */
+  /* min-height:0 or the flex child refuses to shrink and the panel clips the
+     last rows of upgrades with no way to scroll to them */
+  .meta-grid { overflow-y: auto; min-height: 0; padding: 2px 4px 6px; display: flex; flex-direction: column; gap: 6px; }
+  .meta-group {
+    font-size: 12px; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase;
+    opacity: 0.5; margin-top: 6px;
+  }
+  .meta-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: 8px; }
+  .card {
+    font-family: inherit; text-align: left; cursor: pointer; color: var(--ink);
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 9px 11px; border-radius: 16px;
+    border: 3px solid var(--ink); background: #fff;
+    box-shadow: 0 4px 0 rgba(22,50,74,0.4);
+    transition: transform 0.08s ease, background 0.12s ease;
+  }
+  .card:hover { transform: translateY(-3px); }
+  .card-ico { font-size: 22px; line-height: 1.15; }
+  /* the dressing-up box shows the goods: a little lit display box per card with
+     the real hat, ring or trail turning in it, painted by one shared WebGL pass
+     (cosmeticpreview.js) laid over the grid. The emoji inside is the fallback,
+     dropped as soon as the 3D pass claims the slot. */
+  .card-shot {
+    display: flex; align-items: center; justify-content: center;
+    height: 64px; margin: 1px 0 4px; border-radius: 10px; overflow: hidden;
+    font-size: 26px; line-height: 1;
+    background: linear-gradient(#eaf6fb, #cde5f1);
+    box-shadow: inset 0 0 0 2px rgba(22,50,74,0.1);
+  }
+  .card-shot.live { font-size: 0; }
+  .card.equipped .card-shot { background: linear-gradient(#fff6d8, #ffe6a2); }
+  #preview-gl { position: fixed; z-index: 45; pointer-events: none; display: none; }
+  .card-nm { font-weight: 900; font-size: 15px; line-height: 1.1; }
+  .card-blurb { font-size: 11.5px; font-weight: 600; line-height: 1.25; opacity: 0.72; min-height: 29px; }
+  .card-foot {
+    font-size: 11.5px; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase;
+    margin-top: 3px;
+  }
+  .card.owned { background: #eef7fb; }
+  .card.owned .card-foot { color: #1d8fa3; }
+  .card.equipped { background: var(--gold); box-shadow: 0 4px 0 #c99a1d; }
+  .card.locked .card-foot { color: var(--accent); }
+  .card.poor { animation: cardNope 0.34s ease; }
+  @keyframes cardNope {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-7px) rotate(-2deg); }
+    50% { transform: translateX(7px) rotate(2deg); }
+    75% { transform: translateX(-4px); }
+  }
+  .card.bought { animation: cardYes 0.5s cubic-bezier(0.2,1.5,0.4,1); }
+  @keyframes cardYes {
+    0% { transform: scale(1); }
+    40% { transform: scale(1.14) rotate(-2deg); background: var(--gold); }
+    100% { transform: scale(1); }
+  }
+
+  /* cup + class picker */
+  .meta-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pick {
+    font-family: inherit; cursor: pointer; color: var(--ink); flex: 1 1 130px;
+    display: flex; flex-direction: column; align-items: center; gap: 1px;
+    padding: 10px 8px; border-radius: 18px;
+    border: 3px solid var(--ink); background: #fff;
+    box-shadow: 0 4px 0 rgba(22,50,74,0.4);
+    transition: transform 0.08s ease, background 0.12s ease;
+  }
+  .pick:hover { transform: translateY(-3px); }
+  .pick.sel { background: var(--gold); box-shadow: 0 4px 0 #c99a1d; transform: translateY(-3px) scale(1.03); }
+  .pick.locked { opacity: 0.5; background: #e6ddc8; }
+  .pick.poor { animation: cardNope 0.34s ease; }
+  .pick-nm { font-weight: 900; font-size: 16px; }
+  .pick-sub {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6;
+  }
+  .pick.tier.sel { background: var(--tier); box-shadow: 0 4px 0 rgba(22,50,74,0.45); }
+  .pick.tier .pick-nm { font-size: 20px; }
+  .ico-lock { width: 11px; height: 11px; flex: none; }
+  .place-pip {
+    width: 8px; height: 8px; border-radius: 50%; flex: none;
+    background: var(--pip); box-shadow: 0 0 0 1.5px rgba(8,24,40,0.4);
+  }
+
+  /* each cup wears its own stretch of lake, so the card needs no icon glyph.
+     rules sit after .pick.sel / .pick.locked on purpose: those use the
+     background shorthand, which would otherwise wipe the art out */
+  .pick.cup {
+    position: relative; overflow: hidden;
+    align-items: flex-start; justify-content: flex-end; gap: 0;
+    min-height: 100px; padding: 9px 11px; color: #fff; text-align: left;
+    background-color: #1a3550;
+    background-image: var(--art); background-size: cover; background-position: center;
+  }
+  .pick.cup::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(to top, rgba(10,28,45,0.9) 14%, rgba(10,28,45,0.32) 55%, rgba(10,28,45,0) 92%);
+  }
+  .pick.cup > * { position: relative; z-index: 1; }
+  .pick.cup .pick-nm { text-shadow: 0 2px 3px rgba(6,20,34,0.55); }
+  .pick.cup .pick-sub { opacity: 0.85; }
+  .pick.cup.sel { background-color: var(--gold); }
+  .pick.cup.sel::after {
+    background: linear-gradient(to top, rgba(201,154,29,0.95) 22%, rgba(255,210,74,0.22) 62%, rgba(255,210,74,0) 94%);
+  }
+  .pick.cup.sel .pick-nm { color: var(--ink); text-shadow: none; }
+  .pick.cup.sel .pick-sub { color: var(--ink); opacity: 0.8; }
+  /* a locked cup is fogged rather than blacked out, so you can still see what
+     you're climbing towards */
+  .pick.cup.locked { opacity: 0.68; filter: grayscale(0.92) brightness(1.12) contrast(0.78); }
+  .pick.cup.locked::after {
+    background: linear-gradient(to top, rgba(48,60,72,0.8) 16%, rgba(48,60,72,0.28) 60%, rgba(48,60,72,0.04) 95%);
+  }
+
+  #cup-go { align-self: center; }
+  #cup-go:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+  /* payout tally under the podium */
+  #payout {
+    display: flex; flex-direction: column; gap: 3px; pointer-events: none;
+    background: rgba(253,246,227,0.94); color: var(--ink);
+    border: 3px solid var(--ink); border-radius: 18px; padding: 10px 16px;
+    min-width: min(340px, 84vw);
+    box-shadow: 0 4px 0 rgba(22,50,74,0.55), 0 10px 20px rgba(0,0,0,0.3);
+  }
+  .pay-row {
+    display: flex; justify-content: space-between; gap: 18px;
+    font-size: 13.5px; font-weight: 800; opacity: 0;
+    animation: payIn 0.35s ease forwards;
+  }
+  .pay-row .amt { font-weight: 900; color: #1d8fa3; }
+  .pay-row.total {
+    border-top: 2.5px dashed rgba(22,50,74,0.35); margin-top: 4px; padding-top: 5px;
+    font-size: 17px;
+  }
+  .pay-row.total .amt { color: var(--accent); }
+  @keyframes payIn {
+    from { opacity: 0; transform: translateX(-14px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  /* ---------- phones ---------- */
+  @media (max-width: 560px) {
+    .meta-panel { padding: 12px; border-radius: 20px; gap: 8px; }
+    .meta-cards { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
+    .card-blurb { font-size: 10.5px; min-height: 26px; }
+    .card-shot { height: 54px; }
+    .pick { flex-basis: 100px; }
+    #shell-hud { font-size: 17px; padding: 5px 13px 5px 10px; }
+    #patterns { max-width: 92vw; }
+    .pattern-chip { padding: 8px 13px; font-size: 11.5px; }
+    #rock-stats { gap: 10px; padding: 10px 14px; }
+    .stat { min-width: 66px; }
+  }
+  /* ---------- short windows (landscape phones) ---------- */
+  @media (max-height: 560px) {
+    #phase-title { margin-top: 1.5vh; }
+    #color-bar { height: 62vh; }
+    #size-bar { height: 46vh; }
+  }
+
+  /* ---------- playable end card + install CTA ---------- */
+  #pl-endcard {
+    position: fixed; inset: 0; z-index: 80; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 20px; text-align: center;
+    background: radial-gradient(ellipse at 50% 40%, rgba(10,60,90,0.55), rgba(6,22,36,0.82));
+    backdrop-filter: blur(3px); pointer-events: auto; padding: 24px;
+    animation: plFade 0.35s ease-out both;
+  }
+  #pl-endcard.hidden { display: none !important; }
+  @keyframes plFade { from { opacity: 0; } to { opacity: 1; } }
+  #pl-endcard img { width: clamp(220px, 62vw, 460px); height: auto; transform: rotate(-3deg);
+    filter: drop-shadow(0 10px 20px rgba(0,0,0,0.5)); animation: logoBob 3.2s ease-in-out infinite; }
+  #pl-endcard .pl-head {
+    font-size: clamp(30px, 8vw, 64px); font-weight: 900; color: var(--gold);
+    -webkit-text-stroke: 5px var(--ink);
+    paint-order: stroke fill;
+    text-shadow: 0 5px 0 var(--ink), 0 10px 24px rgba(0,0,0,0.45); transform: rotate(-2deg);
+  }
+  #pl-endcard .pl-sub { font-size: clamp(14px, 3vw, 22px); font-weight: 800; color: var(--paper);
+    text-shadow: 0 2px 6px rgba(0,0,0,0.7); }
+  .playable-cta {
+    display: inline-block; text-decoration: none; cursor: pointer;
+    font-family: inherit; font-weight: 900; letter-spacing: 0.06em; text-transform: uppercase;
+    font-size: clamp(20px, 4.4vw, 30px); color: var(--ink); background: var(--gold);
+    padding: 18px 52px; border-radius: 60px;
+    box-shadow: 0 7px 0 #c99a1d, 0 14px 28px rgba(0,0,0,0.4);
+    animation: ctaPulse 1.4s ease-in-out infinite; pointer-events: auto;
+  }
+  .playable-cta:active { transform: translateY(4px); box-shadow: 0 3px 0 #c99a1d, 0 6px 12px rgba(0,0,0,0.4); }
+  @keyframes ctaPulse { 0%,100% { transform: scale(1) rotate(-1deg); } 50% { transform: scale(1.06) rotate(1deg); } }
+  #pl-endcard .pl-retry { font-size: 15px; font-weight: 800; color: var(--paper); opacity: 0.85;
+    background: rgba(10,42,61,0.6); border: 2px solid rgba(253,246,227,0.35); border-radius: 40px;
+    padding: 9px 26px; cursor: pointer; pointer-events: auto; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="vignette" class="layer"></div>
+<div id="underwater-tint" class="layer"></div>
+
+<!-- wobbling displacement filter applied to the canvas while submerged -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="underwaterFilter" x="-5%" y="-5%" width="110%" height="110%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.008 0.018" numOctaves="2" seed="7" result="noise">
+      <animate attributeName="baseFrequency" dur="9s"
+        values="0.008 0.018;0.012 0.027;0.008 0.018" repeatCount="indefinite"/>
+    </feTurbulence>
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="16" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
+<div id="flash" class="layer"></div>
+<div id="popups" class="layer"></div>
+<div id="banner"></div>
+
+<!-- race HUD -->
+<div id="race-hud" class="layer hidden">
+  <canvas id="minimap" width="190" height="190"></canvas>
+  <div id="finishers" class="hidden"></div>
+  <div id="hole-timer" class="hidden">
+    <span class="lbl">FINAL STRETCH</span>
+    <span id="hole-timer-val">2:00</span>
+  </div>
+</div>
+
+<!-- fishing -->
+<div id="fishing-ui" class="layer hidden"></div>
+
+<!-- find / shape / paint shared chrome -->
+<div id="phase-ui" class="layer hidden">
+  <button id="phase-back" class="btn small blue hidden" aria-label="back">←</button>
+  <div id="phase-title">FIND YOUR ROCK</div>
+  <div id="phase-bottom">
+    <div id="rock-stats" class="hidden">
+      <div class="stat flat"><label>FLAT</label><div class="bar"><i id="stat-flat"></i></div></div>
+      <div class="stat heft"><label>HEFT</label><div class="bar"><i id="stat-heft"></i></div></div>
+      <div class="stat grit"><label>GRIT</label><div class="bar"><i id="stat-grit"></i></div></div>
+    </div>
+    <div id="paint-ui" class="hidden">
+      <div id="color-bar" class="paint-slider" role="slider" tabindex="0"
+           aria-label="paint colour" aria-valuemin="0" aria-valuemax="100" aria-valuenow="15">
+        <i id="color-knob" class="paint-knob"></i>
+      </div>
+      <div id="size-bar" class="paint-slider" role="slider" tabindex="0"
+           aria-label="brush size" aria-valuemin="4" aria-valuemax="42" aria-valuenow="13">
+        <i id="size-wedge"></i>
+        <i id="size-knob" class="paint-knob"></i>
+      </div>
+      <div id="patterns"></div>
+    </div>
+    <div id="name-ui" class="hidden">
+      <input id="name-input" type="text" maxlength="20" autocomplete="off" spellcheck="false" aria-label="name your rock">
+      <button id="name-ok" class="btn small">Save it →</button>
+    </div>
+    <button id="shelf-release" class="btn small danger hidden">Toss it back</button>
+    <div id="phase-buttons">
+      <button id="garage-btn" class="btn small blue hidden">🔧 Garage</button>
+      <button id="phase-next" class="btn small hidden">Next →</button>
+    </div>
+  </div>
+</div>
+
+<!-- name plates over the bench slots, and the finger that points at a free one -->
+<div id="shelf-tags" class="layer"></div>
+<img id="tap-hand" class="hidden" alt="" draggable="false">
+
+<!-- title (pre-hidden in the playable — we drop straight into the make-a-rock loop) -->
+<div id="title-screen" class="layer hidden">
+  <img id="game-logo" src="/media/logo.png" alt="Skippidy Skip" draggable="false">
+
+  <!-- main choice -->
+  <div id="menu-main" class="menu-view">
+    <button id="play-btn" class="btn">Solo</button>
+    <button id="mp-btn" class="btn blue">Multiplayer</button>
+  </div>
+
+  <!-- multiplayer: pick a room size, then matchmake with randoms -->
+  <div id="menu-mp" class="menu-view hidden">
+    <div class="menu-label">how many skippers?</div>
+    <div id="room-sizes">
+      <button class="size-chip" data-cap="1">1</button>
+      <button class="size-chip" data-cap="2">2</button>
+      <button class="size-chip" data-cap="3">3</button>
+      <button class="size-chip" data-cap="4">4</button>
+      <button class="size-chip" data-cap="0">∞</button>
+    </div>
+    <div id="mp-actions">
+      <button id="mp-back" class="btn small">← Back</button>
+      <button id="find-btn" class="btn blue">Find match</button>
+    </div>
+    <button id="mp-cancel" class="btn small hidden">Cancel search</button>
+  </div>
+
+  <div id="net-status"></div>
+</div>
+
+<!-- multiplayer lobby panel (persists through rock prep) -->
+<div id="lobby-panel" class="hidden">
+  <div id="lobby-code">ROOM ····</div>
+  <div id="lobby-list"></div>
+  <button id="start-btn" class="btn small hidden">Start race!</button>
+  <div id="lobby-hint">share the code — empty seats become bots</div>
+</div>
+
+<!-- shells: the career currency, on screen everywhere but mid-race -->
+<div id="shell-hud" class="hidden"><span class="ico">🐚</span><span id="shell-count">0</span></div>
+
+<!-- the garage: two upgrade sockets, hats, floaters and trails for one stone -->
+<div id="garage-ui" class="layer meta-scrim hidden">
+  <div class="meta-panel">
+    <div class="meta-head">
+      <div class="meta-title">The Garage</div>
+      <div class="meta-sub" id="garage-rock"></div>
+      <button id="garage-close" class="btn small blue">Done</button>
+    </div>
+    <div id="garage-sockets"></div>
+    <div id="garage-tabs" class="meta-tabs"></div>
+    <div id="garage-grid" class="meta-grid"></div>
+  </div>
+</div>
+
+<!-- cup + class picker -->
+<div id="cup-ui" class="layer meta-scrim hidden">
+  <div class="meta-panel">
+    <div class="meta-head">
+      <div class="meta-title">Pick your cup</div>
+      <button id="cup-close" class="btn small blue">← Bench</button>
+    </div>
+    <div id="cup-list" class="meta-row"></div>
+    <div class="meta-label">Class</div>
+    <div id="tier-list" class="meta-row"></div>
+    <button id="cup-go" class="btn">Race! →</button>
+  </div>
+</div>
+
+<!-- results -->
+<div id="results-ui" class="layer hidden">
+  <div class="bigtitle" style="font-size: clamp(36px,7vw,80px);" id="results-title">RESULTS</div>
+  <div id="results-body">
+    <div id="results-list"></div>
+    <div id="payout" class="hidden"></div>
+  </div>
+  <div id="results-btns">
+    <button id="next-cup-btn" class="btn hidden">Next cup →</button>
+    <button id="again-btn" class="btn blue">Back to the bench</button>
+  </div>
+</div>
+
+<div id="letterbox" class="layer">
+  <div class="bar top"></div>
+  <div class="bar bot"></div>
+  <div id="replay-tag">REC · INSTANT REPLAY</div>
+</div>
+
+<button id="muter" title="sound">
+  <svg id="ic-sound" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/>
+    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+  </svg>
+  <svg id="ic-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="hidden">
+    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/>
+    <line x1="23" y1="9" x2="17" y2="15"/>
+    <line x1="17" y1="9" x2="23" y2="15"/>
+  </svg>
+</button>
+<div id="wipe" class="layer"></div>
+
+<!-- playable install end card (shown by main.js via __playableEnd__ once the rock is painted) -->
+<div id="pl-endcard" class="hidden">
+  <img src="/media/logo.png" alt="Skippidy Skip" draggable="false">
+  <div class="pl-head" id="pl-headline">NICE ROCK!</div>
+  <div class="pl-sub">Now race it across a lake full of rivals, boats &amp; ducks.</div>
+  <a id="pl-cta" class="playable-cta"
+     href="https://play.google.com/store/apps/details?id=games.misaligned.skippidyskip"
+     data-store-url="https://play.google.com/store/apps/details?id=games.misaligned.skippidyskip">Get the full game</a>
+  <div class="pl-retry" id="pl-retry">Make another</div>
+</div>
+
+<script>
+  // Playable ad glue — CTA routing + AppLovin analytics. Vanilla and outside the
+  // game module so it works even if the bundle errors.
+  (function () {
+    var STORE_URL = 'https://play.google.com/store/apps/details?id=games.misaligned.skippidyskip';
+    function track(event) {
+      try {
+        var al = window.ALPlayableAnalytics;
+        if (al && typeof al.trackEvent === 'function') al.trackEvent(event);
+      } catch (_) { /* analytics must never break the ad */ }
+    }
+    window.__track = track;
+    track('LOADED');
+
+    document.addEventListener('pointerdown', function arm() {
+      document.removeEventListener('pointerdown', arm);
+      track('CHALLENGE_STARTED');
+      setTimeout(function () { track('CHALLENGE_PASS_25'); }, 30000);
+      setTimeout(function () { track('CHALLENGE_PASS_50'); }, 90000);
+      setTimeout(function () { track('CHALLENGE_PASS_75'); }, 300000);
+    });
+
+    function openStore(url) {
+      var target = url || STORE_URL;
+      track('CTA_CLICKED');
+      try {
+        var m = window.mraid;
+        if (m && typeof m.open === 'function') { m.open(target); return; }
+        var fb = window.FbPlayableAd;
+        if (fb && typeof fb.onCTAClick === 'function') { fb.onCTAClick(); return; }
+        if (typeof window.onCTAClick === 'function') { window.onCTAClick(); return; }
+        if (typeof window.install === 'function') { window.install(); return; }
+      } catch (_) { /* fall through to the plain link */ }
+      window.open(target, '_blank', 'noopener');
+    }
+    window.__openStore = openStore;
+    document.addEventListener('click', function (e) {
+      var a = e.target.closest && e.target.closest('[data-store-url]');
+      if (!a) return;
+      e.preventDefault();
+      openStore(a.getAttribute('data-store-url'));
+    });
+
+    // main.js (__PLAYABLE_CRAFT__ build) calls this once the stone is painted.
+    window.__playableEnd__ = function () {
+      var card = document.getElementById('pl-endcard');
+      if (card) card.classList.remove('hidden');
+      track('CHALLENGE_SOLVED');
+      track('ENDCARD_SHOWN');
+    };
+
+    document.getElementById('pl-retry').addEventListener('click', function () {
+      track('CHALLENGE_RETRY');
+      location.reload();
+    });
+  })();
+</script>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

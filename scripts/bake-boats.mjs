@@ -5,8 +5,8 @@
  *
  *   node scripts/bake-boats.mjs
  *
- * Same deal as bake-fish.mjs: the game ships no runtime-fetched assets (see
- * scripts/build-playable.mjs), so these are turned into plain arrays that live in
+ * Same deal as bake-fish.mjs: the game ships (next to) no runtime-fetched assets (see
+ * scripts/build-playable-*.mjs), so these are turned into plain arrays that live in
  * the bundle and rebuild into a BufferGeometry instantly (src/boats.js).
  *
  * COLOUR. All four models are one mesh with one material pointing at a shared

@@ -43,6 +43,7 @@ import { resolveMods, UPGRADE_BY_ID } from "./upgrades.js";
 import { emitTrail, trailBurst } from "./cosmetics.js";
 import { CUPS, TIERS, buildCourse, payoutFor } from "./cups.js";
 import { initAnalytics, track } from "./analytics.js";
+import { initTweakMenu } from "./tweakmenu.js";
 
 // ------------------------------------------------------------------ renderer
 const canvas = document.getElementById("c");
@@ -89,13 +90,21 @@ const cel = new CelShader(scene, { steps: 4, floor: 0.42, rescanSec: 1.0 });
 const CAPTURE_R = VORTEX_R;
 const FERRY_NAMES = { row: "rowboat", outboard: "motorboat", trawler: "fishing boat" };
 
-// PLAYABLE-AD slice (built with playable-kit, __PLAYABLE__ define). Trims the
-// game to its core skip-and-chain loop: skip title/find/shape/paint, drop
-// straight onto one short, obstacle-light hole with the flag within a throw or
-// two, one rival for life. Win => the ad's end-card CTA (wired in the playable
-// entry html). `typeof` guard keeps the token inert in normal web/Android builds.
-const IS_PLAYABLE = typeof __PLAYABLE__ !== "undefined" && !!__PLAYABLE__;
-if (IS_PLAYABLE) {
+// PLAYABLE-AD slices (built with playable-kit). There are two, each a compile
+// -time define that trims main.js to one half of the game:
+//   __PLAYABLE_SKIP__  — the skip-and-chain race: skip title/find/shape/paint,
+//                        drop straight onto one short obstacle-light hole with a
+//                        few *nerfed* rivals (see bots.js AIM_NERF). Win => CTA.
+//   __PLAYABLE_CRAFT__ — the make-a-rock loop: find -> shape -> paint, then the
+//                        ad's end card. No racing at all.
+// `typeof` guards keep the tokens inert in the normal web/Android build.
+const IS_PLAYABLE_SKIP = typeof __PLAYABLE_SKIP__ !== "undefined" && !!__PLAYABLE_SKIP__;
+const IS_PLAYABLE_CRAFT = typeof __PLAYABLE_CRAFT__ !== "undefined" && !!__PLAYABLE_CRAFT__;
+// Shared "we're inside an ad" flag: skips meta/analytics/title bootstrapping.
+const IS_PLAYABLE = IS_PLAYABLE_SKIP || IS_PLAYABLE_CRAFT;
+// Debug scene-colour tweak menu (press `). Dev tool only — kept out of ads.
+if (!IS_PLAYABLE) initTweakMenu({ scene, world, water });
+if (IS_PLAYABLE_SKIP) {
   HOLES.length = 0;
   HOLES.push({
     time: 60,
@@ -118,7 +127,7 @@ let COURSE = HOLES;
 // order they drop in is the order they score (holePoints). It's a deadline for
 // the players, not a wait — the hole is called the moment they're all home. The
 // ad slice runs a short one so its end-card isn't two minutes away.
-const FINAL_STRETCH = IS_PLAYABLE ? 15 : 120;
+const FINAL_STRETCH = IS_PLAYABLE_SKIP ? 15 : 120;
 /** what a hole is worth from a given finishing place; stones still on the water
  * at the bell score nothing, so any stone in the hole beats any stone out of it */
 const holePoints = (place) => Math.max(1, G.racers.length - place + 1);
@@ -1559,7 +1568,7 @@ ui.els.phaseNext.addEventListener("click", () => {
   if (G.state === "shelf" && G.shelfSel >= 0) launchFromShelf();
   else if (G.state === "find" && G.candidateIdx >= 0) enterShape();
   else if (G.state === "shape") enterPaint();
-  else if (G.state === "paint") enterName();
+  else if (G.state === "paint") { if (IS_PLAYABLE_CRAFT) finishCraftPlayable(); else enterName(); }
 });
 
 // ------------------------------------------------------------------ net ready + start
@@ -1833,7 +1842,7 @@ function enterPaint() {
   G.paintDrag.spinVel = 0.5;
   G.idleSpinAt = G.elapsed; // idle turntable spins from entry until first touch
   ui.showPhase("PAINT IT");
-  ui.els.phaseNext.textContent = "To the lake! →";
+  ui.els.phaseNext.textContent = IS_PLAYABLE_CRAFT ? "Done! ✓" : "To the lake! →";
   ui.els.rockStats.classList.add("hidden");
   G.playerRock.fadeEyes(1); // face back on for the paint booth
   ui.buildPaintUI({
@@ -1970,7 +1979,9 @@ function startRace() {
 
     // bots — how many and how sharp is the class the player picked
     G.racers = [G.player];
-    const fleet = IS_PLAYABLE ? 1 : (NET.mode === "solo" ? G.tier.botCount : BOT_PERSONAS.length);
+    // Skip playable: a small pack of rivals (all nerfed via bots.js AIM_NERF) so
+    // the demo feels like a race, not a solo throw.
+    const fleet = IS_PLAYABLE_SKIP ? 3 : (NET.mode === "solo" ? G.tier.botCount : BOT_PERSONAS.length);
     BOT_PERSONAS.slice(0, fleet).forEach((persona, i) => {
       const rock = randomBotRock(1000 + i * 77);
       scene.add(rock.group);
@@ -2608,7 +2619,7 @@ function endMatch(rowsIn = null) {
   }));
   const playerWon = rows[0]?.me;
   track("race_end", { mode: NET.mode, won: !!playerWon, place: rows.findIndex((r) => r.me) + 1 });
-  if (IS_PLAYABLE) {
+  if (IS_PLAYABLE_SKIP) {
     // Hand off to the ad's end-card CTA (defined in the playable entry html).
     if (playerWon) { audio.win(); } else { audio.lose(); }
     cam.mode = "orbit";
@@ -3005,9 +3016,12 @@ function frame(now) {
   renderer.render(scene, camera);
 }
 
-if (IS_PLAYABLE) {
+if (IS_PLAYABLE_SKIP) {
   // Skip all the prep chrome — hand the player a ready flat stone and go.
   startPlayable();
+} else if (IS_PLAYABLE_CRAFT) {
+  // Drop straight onto the beach to make a rock: find -> shape -> paint.
+  startCraftPlayable();
 } else {
   // analytics + attribution: safe no-ops without keys (see src/analytics.js).
   loadMeta(); // the career, read through once before anything asks for shells
@@ -3032,10 +3046,31 @@ function startPlayable() {
   startRace();
 }
 
+// Craft slice bootstrap: no title, no race — set the open-lake backdrop the
+// title screen would normally lay down, then walk onto the beach to pick,
+// shape and paint a stone. The paint "Done!" button ends into the ad card.
+function startCraftPlayable() {
+  ui.els.title.classList.add("hidden");
+  water.setPath(null); // full open lake, not a hole's channel
+  water.setVortex(); // no whirlpool cut into it
+  world.setHole(null); // radial disc ground/grass to match the open lake
+  enterFind();
+}
+
+// The stone is shaped and painted: show it off, then hand to the ad end card
+// (the entry html's __playableEnd__ swaps in craft-flavoured copy + the CTA).
+function finishCraftPlayable() {
+  audio.win();
+  ui.hidePhase();
+  G.playerRock?.react?.("excited", 2);
+  G.playerRock?.kickEyes?.(1.4);
+  try { window.__playableEnd__ && window.__playableEnd__(true); } catch (e) { /* never break the ad */ }
+}
+
 // tiny hook for automated smoke tests (harmless in normal play)
 window.__skimmers = {
   G, selectCandidate, worldToScreen, cam, camRig, camera, THREE, HOLES, boats, fishing,
-  startPlayable, setupHole, bench, enterShelf, pickSlot, confirmName, endMatch,
+  startPlayable, startCraftPlayable, setupHole, bench, enterShelf, pickSlot, confirmName, endMatch,
   // career hooks, so a test can hand itself a pile of shells or wipe the save
   meta: { loadMeta, shells, addShells, resetMeta, loadoutFor },
   get course() { return COURSE; },

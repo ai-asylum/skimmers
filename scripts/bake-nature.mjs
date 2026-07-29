@@ -4,8 +4,8 @@
  *
  *   node scripts/bake-nature.mjs
  *
- * Same deal as bake-fish.mjs: the game fetches nothing at runtime (see
- * scripts/build-playable.mjs), so the trees and undergrowth can't be loaded with
+ * Same deal as bake-fish.mjs: the game fetches (next to) nothing at runtime (see
+ * the playable builds under scripts/build-playable-*.mjs), so the trees and undergrowth can't be loaded with
  * OBJLoader at boot. This offline step turns each model into plain arrays that
  * live in the bundle and rebuild into a BufferGeometry instantly (src/foliage.js).
  *

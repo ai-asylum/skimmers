@@ -156,14 +156,56 @@ const GRASS_DARK = [0.31, 0.6, 0.29];
 const ROCK = [0.6, 0.65, 0.64];
 const lerp3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
+// ---- debug-tweakable land gradient (see tweakmenu.js) ------------------------
+// The whole dry bank — shoreline grass, inland slopes, up to the bare rocky
+// peaks — is coloured by a single elevation gradient. It is an editable list of
+// { t, c } stops (t in 0..1, c linear rgb) so the tweak menu can add/move/recolour
+// stops at runtime. `t = 0` is the shoreline and `t = 1` is the tallest peak of
+// the current hole: the span is measured live in setPath (`_gradMax`) so the end
+// of the gradient always lands on the highest ground, not a fixed height.
+const _tmpCol = new THREE.Color();
+export const GRAD_MAX = 16; // fallback span before the first setPath measures the real one
+let _gradMax = GRAD_MAX;
+const hexToLin = (hex) => { _tmpCol.set(hex); return [_tmpCol.r, _tmpCol.g, _tmpCol.b]; };
+let GRAD = [
+  { t: 0, c: hexToLin("#7cb86b") },
+  { t: 0.234, c: hexToLin("#5c9358") },
+  { t: 0.571, c: hexToLin("#679e67") },
+  { t: 1, c: hexToLin("#cbd3d1") },
+];
+
+function gradColor(u) {
+  u = clamp01(u);
+  const n = GRAD.length;
+  if (u <= GRAD[0].t) return GRAD[0].c;
+  if (u >= GRAD[n - 1].t) return GRAD[n - 1].c;
+  for (let i = 0; i < n - 1; i++) {
+    const a = GRAD[i], b = GRAD[i + 1];
+    if (u >= a.t && u <= b.t) return lerp3(a.c, b.c, (u - a.t) / ((b.t - a.t) || 1));
+  }
+  return GRAD[n - 1].c;
+}
+
+export function getTerrainGradient() {
+  return GRAD.map((s) => ({
+    t: s.t,
+    hex: "#" + _tmpCol.setRGB(s.c[0], s.c[1], s.c[2], THREE.LinearSRGBColorSpace).getHexString(),
+  }));
+}
+export function setTerrainGradient(stops) {
+  const next = stops
+    .map((s) => { _tmpCol.set(s.hex); return { t: clamp01(s.t), c: [_tmpCol.r, _tmpCol.g, _tmpCol.b] }; })
+    .sort((a, b) => a.t - b.t);
+  GRAD = next.length ? next : [{ t: 0, c: GRASS.slice() }];
+}
+
 function colorFor(kind, y, x, z) {
   if (kind === "sand") return SAND;
   // the bed silts up as it drops, so a dive reads depth the way the water does
   if (kind === "bed") return lerp3(MUD, MUD_DEEP, clamp01(-y / (BED_MAX * 0.55)));
-  // green while a lob could still clear it, bleaching to bare rock above —
-  // the colour of a bank is the "can I get over that?" read from the tee
-  let c = lerp3(GRASS, GRASS_DARK, clamp01(y / 10));
-  if (y > LOB_CLEAR) c = lerp3(c, ROCK, clamp01((y - LOB_CLEAR) / 6));
+  // the bank's colour is the "can I get over that?" read from the tee: the
+  // gradient runs from shoreline grass up to the bare rock of an un-loppable wall
+  const c = gradColor(y / _gradMax);
   const n = (Math.sin(x * 0.53) + Math.cos(z * 0.61)) * 0.03; // subtle patchiness
   return [clamp01(c[0] + n), clamp01(c[1] + n), clamp01(c[2] + n)];
 }
@@ -342,6 +384,8 @@ export class Terrain {
 
   /** rebuild the displaced mesh for a hole's channel (null => radial disc) */
   setPath(path, halfWidth = CHANNEL_W) {
+    this._lastPath = path;
+    this._lastHalfW = halfWidth;
     setTerrainPath(path, halfWidth);
     const pos = this.geo.attributes.position;
     const n = pos.count;
@@ -350,18 +394,34 @@ export class Terrain {
     let sandAttr = this.geo.getAttribute("aSand");
     if (!sandAttr) { sandAttr = new THREE.BufferAttribute(new Float32Array(n), 1); this.geo.setAttribute("aSand", sandAttr); }
     const colors = colAttr.array;
+    if (!this._ys || this._ys.length !== n) { this._ys = new Float32Array(n); this._kinds = new Array(n); }
+    // Pass 1: displace + measure the tallest grassy peak so the gradient's top
+    // stop lands on the real summit rather than a fixed height.
+    let peak = 1;
     for (let i = 0; i < n; i++) {
       const x = pos.getX(i), z = pos.getZ(i);
       const s = sample(x, z);
       pos.setY(i, s.y);
-      const c = colorFor(s.kind, s.y, x, z);
-      colors[i * 3] = c[0]; colors[i * 3 + 1] = c[1]; colors[i * 3 + 2] = c[2];
       sandAttr.array[i] = s.sand;
+      this._ys[i] = s.y;
+      this._kinds[i] = s.kind;
+      if (s.kind === "grass" && s.y > peak) peak = s.y;
+    }
+    _gradMax = peak;
+    // Pass 2: colour now that the elevation span is known.
+    for (let i = 0; i < n; i++) {
+      const c = colorFor(this._kinds[i], this._ys[i], pos.getX(i), pos.getZ(i));
+      colors[i * 3] = c[0]; colors[i * 3 + 1] = c[1]; colors[i * 3 + 2] = c[2];
     }
     pos.needsUpdate = true;
     colAttr.needsUpdate = true;
     sandAttr.needsUpdate = true;
     this.geo.computeVertexNormals();
     this.geo.computeBoundingSphere();
+  }
+
+  /** re-bake vertex colours/heights for the current hole (after a palette tweak) */
+  rebuild() {
+    this.setPath(this._lastPath, this._lastHalfW);
   }
 }

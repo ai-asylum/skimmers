@@ -4,7 +4,7 @@
  *
  *   node scripts/bake-fish.mjs
  *
- * The game ships no runtime-fetched assets (see scripts/build-playable.mjs), so
+ * The game ships (next to) no runtime-fetched assets (see scripts/build-playable-*.mjs), so
  * the sculpted fish can't be loaded with FBXLoader at boot: that would add the
  * loader to the bundle, an async load, and a file the playable ad can't embed.
  * Instead this offline step turns each FBX into plain arrays that live in the

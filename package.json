@@ -4,8 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "vite",
+    "dev:playable:skip": "vite --config vite.playable-skip.config.js",
+    "dev:playable:craft": "vite --config vite.playable-craft.config.js",
     "build": "vite build && cp -r store dist/store",
-    "build:playable": "node scripts/build-playable.mjs",
+    "build:playable": "npm run build:playable:skip && npm run build:playable:craft",
+    "build:playable:skip": "node scripts/build-playable-skip.mjs",
+    "build:playable:craft": "node scripts/build-playable-craft.mjs",
     "bake:fish": "node scripts/bake-fish.mjs",
     "bake:nature": "node scripts/bake-nature.mjs",
     "preview": "vite preview --port 8741",

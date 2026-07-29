@@ -17,6 +17,7 @@
  */
 import * as THREE from "three";
 import { socketFor, onEyeTuningChange } from "./eyeconfig.js";
+import { assetUrl } from "playable-kit/runtime";
 
 // ?v bump busts stale browser caches when the sheet asset is re-keyed
 const SHEET_URL = "rock-eyes-grid.png?v=2";
@@ -78,7 +79,9 @@ function ensureLoaded() {
     assets.pending.clear();
   };
   img.onerror = () => console.error("[flateyes] failed to load", SHEET_URL);
-  img.src = SHEET_URL;
+  // In a playable-ad bundle the sheet is embedded as a data: URI; assetUrl maps
+  // it (and falls through untouched in the normal web/Android build).
+  img.src = assetUrl(SHEET_URL);
 }
 
 // ---- socket auto-detection (biggest ink blob per half of each cell) --------

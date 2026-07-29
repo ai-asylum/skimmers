@@ -90,6 +90,45 @@ export function vortexSurfaceY(r) {
 // palette land on screen as the exact bytes picked here.
 const paint = (hex) => new THREE.Color().setHex(hex, THREE.LinearSRGBColorSpace);
 
+// the surface tone bands the tweak menu can repaint (deep spine -> shore -> whites)
+export const WATER_COLOR_KEYS = ["uDeep", "uMid", "uShallow", "uShelf", "uSheen", "uFoam"];
+
+// the four flat depth bands, deep spine -> shore, that the depth gradient feeds
+const WATER_DEPTH_KEYS = ["uDeep", "uMid", "uShallow", "uShelf"];
+// default editable depth gradient (deep spine -> shore)
+const DEFAULT_DEPTH_STOPS = [
+  { t: 0, hex: "#3f82ab" },
+  { t: 0.3333333333333333, hex: "#378ba9" },
+  { t: 0.7607377283105022, hex: "#1b8793" },
+  { t: 1, hex: "#29a3b3" },
+];
+
+function sampleStops(stops, t) {
+  const s = [...stops].sort((a, b) => a.t - b.t);
+  if (t <= s[0].t) return s[0].hex;
+  if (t >= s[s.length - 1].t) return s[s.length - 1].hex;
+  for (let i = 0; i < s.length - 1; i++) {
+    if (t >= s[i].t && t <= s[i + 1].t) {
+      const f = (t - s[i].t) / ((s[i + 1].t - s[i].t) || 1);
+      const a = parseInt(s[i].hex.slice(1), 16), b = parseInt(s[i + 1].hex.slice(1), 16);
+      const ch = (sh) => Math.round(((a >> sh) & 255) + (((b >> sh) & 255) - ((a >> sh) & 255)) * f);
+      return "#" + ((1 << 24) + (ch(16) << 16) + (ch(8) << 8) + ch(0)).toString(16).slice(1);
+    }
+  }
+  return s[s.length - 1].hex;
+}
+
+// toggleable surface effects: { label -> uniform } exposed to the tweak menu
+export const WATER_FX = {
+  "Cel banding": "uFxCel",
+  "Crest streaks": "uFxStreaks",
+  "Whitecaps": "uFxCaps",
+  "Sun glitter": "uFxGlitter",
+  "Horizon sheen": "uFxSheen",
+  "Cloud shadows": "uFxClouds",
+  "Foam collar": "uFxCollar",
+};
+
 // module-level mirror of the shader's path so JS helpers match the visuals
 let _path = null; // Array<{x,z}> | null (null => full radial disc, e.g. title)
 let _halfW = CHANNEL_W;
@@ -169,10 +208,10 @@ export class Water {
       uTime: { value: 0 },
       uSunDir: { value: new THREE.Vector3(0.5, 0.7, 0.3).normalize() },
       // four flat tones, spine outwards, then the whites
-      uDeep: { value: paint(0x175e8a) },
-      uMid: { value: paint(0x2186ac) },
-      uShallow: { value: paint(0x3cb8c6) },
-      uShelf: { value: paint(0x62d8cf) },
+      uDeep: { value: paint(0x3f82ab) },
+      uMid: { value: paint(0x378ba9) },
+      uShallow: { value: paint(0x1b8793) },
+      uShelf: { value: paint(0x29a3b3) },
       uSheen: { value: paint(0xd6f4ff) },
       uFoam: { value: paint(0xffffff) },
       uLakeR: { value: LAKE_R },
@@ -186,6 +225,14 @@ export class Water {
       // the hole punched for the whirlpool: centre, and radius (0 => no hole)
       uVortex: { value: new THREE.Vector2(0, 0) },
       uVortexR: { value: 0 },
+      // per-effect strength 0..1 for the debug tweak menu (multiplier)
+      uFxCel: { value: 0 },
+      uFxStreaks: { value: 0 },
+      uFxCaps: { value: 0 },
+      uFxGlitter: { value: 0.3 },
+      uFxSheen: { value: 0.6 },
+      uFxClouds: { value: 0.3 },
+      uFxCollar: { value: 0.65 },
     };
 
     const mat = new THREE.ShaderMaterial({
@@ -220,6 +267,13 @@ export class Water {
         uniform float uNoiseAmp;
         uniform vec2 uVortex;
         uniform float uVortexR;
+        uniform float uFxCel;
+        uniform float uFxStreaks;
+        uniform float uFxCaps;
+        uniform float uFxGlitter;
+        uniform float uFxSheen;
+        uniform float uFxClouds;
+        uniform float uFxCollar;
         varying vec3 vWorld;
 
         ${SWELL_GLSL}
@@ -341,8 +395,8 @@ export class Water {
 
           // --- cel bands across the swell faces --------------------------------
           float lam = dot(N, L);
-          water *= 1.0 + 0.13 * hardEdge(0.82, 0.02, lam)
-                       - 0.15 * (1.0 - hardEdge(0.66, 0.02, lam));
+          water *= 1.0 + uFxCel * (0.13 * hardEdge(0.82, 0.02, lam)
+                       - 0.15 * (1.0 - hardEdge(0.66, 0.02, lam)));
 
           // --- painted crest streaks -------------------------------------------
           // Each domain is squashed across z so the ribbons come out as long crest
@@ -360,12 +414,12 @@ export class Water {
           // also bow out short of the shore so they do not fight the foam collar.
           streak *= (0.15 + 1.05 * smoothstep(-0.05, 0.55, crest))
                   * (1.0 - smoothstep(edgeW - 5.0, edgeW - 2.0, dw));
-          water = mix(water, uFoam, clamp(streak, 0.0, 1.0) * 0.72);
+          water = mix(water, uFoam, clamp(streak, 0.0, 1.0) * 0.72 * uFxStreaks);
 
           // --- whitecaps on the highest crests ---------------------------------
           float capN = noise(P * 0.55 + vec2(t * 0.18, -t * 0.12));
           float cap = hardEdge(0.90, 0.012, crest * 0.55 + 0.5 + capN * 0.22);
-          water = mix(water, uFoam, cap * 0.55);
+          water = mix(water, uFoam, cap * 0.55 * uFxCaps);
 
           // --- toon sun glitter -------------------------------------------------
           // One tight highlight band, hard-stepped, plus blinking stars. Anything
@@ -373,20 +427,20 @@ export class Water {
           // distance, where the cell detail would only alias into shimmer.
           float sun = smoothstep(0.05, 0.28, pow(max(dot(N, normalize(L + V)), 0.0), 30.0));
           float sunBand = hardEdge(0.5, 0.06, sun);
-          water = mix(water, uSheen, sunBand * 0.50);
+          water = mix(water, uSheen, sunBand * 0.50 * uFxGlitter);
           // Confined to that band so every star lands at full white: a half-lit
           // sparkle on flat water reads as a dirt speck, not a glint.
-          water = mix(water, uFoam, sparkle(P, t) * sunBand * near);
+          water = mix(water, uFoam, sparkle(P, t) * sunBand * near * uFxGlitter);
 
           // --- quantised horizon sheen -----------------------------------------
           // Kept faint on purpose: any more and the near-white sheen milks the
           // flat bands into grey patches, which is the opposite of the look.
           float fres = clamp(pow(1.0 - max(dot(N, V), 0.0), 3.0), 0.0, 1.0);
-          water = mix(water, uSheen, floor(fres * 3.0) / 3.0 * 0.10);
+          water = mix(water, uSheen, floor(fres * 3.0) / 3.0 * 0.10 * uFxSheen);
 
           // --- drifting cloud shadows, hard-stepped ----------------------------
           float cloud = hardEdge(0.60, 0.02, noise(P * 0.016 + vec2(t * 0.013, t * 0.007)));
-          water *= 1.0 - 0.07 * cloud;
+          water *= 1.0 - 0.07 * cloud * uFxClouds;
 
           // --- foam collar at the shoreline ------------------------------------
           // Thick, hard-edged, and it laps: the inner edge breathes in and out
@@ -401,7 +455,7 @@ export class Water {
                       - hardEdge(inner - 0.55, 0.10, dw);
           float speck = hardEdge(0.45, 0.02, noise(P * 1.1 + vec2(t * 0.30, t * 0.11)));
           water = mix(water, uFoam,
-            clamp(collar * (0.78 + 0.22 * speck) + trail * 0.50, 0.0, 1.0));
+            clamp(collar * (0.78 + 0.22 * speck) + trail * 0.50, 0.0, 1.0) * uFxCollar);
 
           // The sand + grass banks are a real displaced mesh now (src/terrain.js).
           // Keep the waterline crisp (cartoon water ends, it does not dissolve)
@@ -419,10 +473,65 @@ export class Water {
     this.mesh.position.y = WATER_Y;
     this.mesh.renderOrder = 1;
     scene.add(this.mesh);
+
+    this._speed = 0.6; // default animation speed (tweak menu overrides)
+    this.setDepthGradient(DEFAULT_DEPTH_STOPS);
   }
 
   update(dt, elapsed) {
-    this.uniforms.uTime.value = elapsed;
+    // accumulate scaled time so the speed knob doesn't jump the phase when it
+    // changes; falls back to raw elapsed the first frame / if dt is missing
+    if (this._speed == null) this._speed = 1;
+    if (this._t == null) this._t = elapsed;
+    this._t += (dt || 0) * this._speed;
+    this.uniforms.uTime.value = this._t;
+  }
+
+  getSpeed() { return this._speed == null ? 1 : this._speed; }
+  setSpeed(v) { this._speed = v; }
+
+  /**
+   * The lake's flat tone bands, exposed for the debug tweak menu. The shader
+   * writes gl_FragColor raw (see `paint`), so these round-trip through the
+   * linear space the bytes were picked in rather than sRGB.
+   */
+  getColors() {
+    const out = {};
+    for (const k of WATER_COLOR_KEYS) {
+      out[k] = "#" + this.uniforms[k].value.getHexString(THREE.LinearSRGBColorSpace);
+    }
+    return out;
+  }
+  setColor(key, hex) {
+    if (!this.uniforms[key]) return;
+    this.uniforms[key].value.setHex(parseInt(hex.slice(1), 16), THREE.LinearSRGBColorSpace);
+  }
+
+  /** set a surface effect's strength 0..1 (the uFx* uniform is a multiplier) */
+  setFx(key, v) {
+    if (this.uniforms[key]) this.uniforms[key].value = Number(v) || 0;
+  }
+  getFx(key) {
+    return this.uniforms[key] ? this.uniforms[key].value : 1;
+  }
+
+  /**
+   * The four flat depth bands as one editable gradient (deep spine -> shore).
+   * The bands stay hard-edged; the gradient just supplies their four colours,
+   * sampled evenly, so any number of stops still resolves to the four tones.
+   */
+  getDepthGradient() {
+    if (!this._depthStops) {
+      this._depthStops = WATER_DEPTH_KEYS.map((k, i) => ({
+        t: i / (WATER_DEPTH_KEYS.length - 1),
+        hex: "#" + this.uniforms[k].value.getHexString(THREE.LinearSRGBColorSpace),
+      }));
+    }
+    return this._depthStops.map((s) => ({ t: s.t, hex: s.hex }));
+  }
+  setDepthGradient(stops) {
+    this._depthStops = stops.map((s) => ({ t: s.t, hex: s.hex }));
+    WATER_DEPTH_KEYS.forEach((k, i) => this.setColor(k, sampleStops(stops, i / (WATER_DEPTH_KEYS.length - 1))));
   }
 
   /**

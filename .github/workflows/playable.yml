@@ -1,11 +1,12 @@
 name: Playable
 
-# Rebuilds ads/playable/index.html from source and behaviorally smoke-tests it
-# (headless Chromium over file://: canvas renders, no page errors, no disallowed
-# external requests). Mirrors ai-asylum/playable-kit's reusable playable-check
-# workflow, inlined here because that workflow lives in a PRIVATE repo this repo
-# can't resolve via `uses:`. On main pushes a stale committed artifact is
-# rebuilt-and-committed back; the smoke test is the gate on every event.
+# Rebuilds BOTH playable artifacts (ads/playable-skip + ads/playable-craft) from
+# source and behaviorally smoke-tests them (headless Chromium over file://:
+# canvas renders, no page errors, no disallowed external requests). Mirrors
+# ai-asylum/playable-kit's reusable playable-check workflow, inlined here because
+# that workflow lives in a PRIVATE repo this repo can't resolve via `uses:`. On
+# main pushes a stale committed artifact is rebuilt-and-committed back; the smoke
+# test is the gate on every event.
 
 on:
   push:
@@ -13,9 +14,12 @@ on:
     paths:
       - "src/**"
       - "media/**"
-      - "ads/playable-src/**"
-      - "scripts/build-playable.mjs"
-      - "vite.playable.config.js"
+      - "ads/playable-skip-src/**"
+      - "ads/playable-craft-src/**"
+      - "scripts/build-playable-skip.mjs"
+      - "scripts/build-playable-craft.mjs"
+      - "vite.playable-skip.config.js"
+      - "vite.playable-craft.config.js"
       - "vendor/**"
       - "package*.json"
   pull_request:
@@ -31,7 +35,7 @@ jobs:
     permissions:
       contents: write # for the rebuild commit on push
     env:
-      PLAYABLE_GLOB: ads/playable/*.html
+      PLAYABLE_GLOB: ads/playable-skip/*.html ads/playable-craft/*.html
     steps:
       - uses: actions/checkout@v4
         with:

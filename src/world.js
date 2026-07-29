@@ -18,17 +18,66 @@ import { celMat } from "./celshader.js";
 
 const INK = 0x16324a;
 
+// Base colour for the big rock outcrops. Kept at module scope so the debug
+// tweak menu can repaint every spire (including ones rebuilt on the next hole)
+// from a single hue; stoneDark is derived as a darker shade of the same colour.
+const _rockStone = new THREE.Color(0xb5a77d);
+
 // ------------------------------------------------------------------ sky
+// The dome's colour is an editable gradient (horizon -> zenith) baked into a
+// small ramp texture the shader samples by view-direction height. Matches the
+// terrain gradient editor. Sun and horizon fog are layered on top.
+const DEFAULT_SKY_STOPS = [
+  { t: 0, hex: "#ffe9c4" },
+  { t: 0.35, hex: "#a7dcef" },
+  { t: 1, hex: "#3f9bd8" },
+];
+
+const _rampCol = new THREE.Color();
+function sampleStops(stops, t) {
+  const s = [...stops].sort((a, b) => a.t - b.t);
+  if (t <= s[0].t) return s[0].hex;
+  if (t >= s[s.length - 1].t) return s[s.length - 1].hex;
+  for (let i = 0; i < s.length - 1; i++) {
+    if (t >= s[i].t && t <= s[i + 1].t) {
+      const f = (t - s[i].t) / ((s[i + 1].t - s[i].t) || 1);
+      const a = parseInt(s[i].hex.slice(1), 16), b = parseInt(s[i + 1].hex.slice(1), 16);
+      const ch = (sh) => Math.round(((a >> sh) & 255) + (((b >> sh) & 255) - ((a >> sh) & 255)) * f);
+      return "#" + ((1 << 24) + (ch(16) << 16) + (ch(8) << 8) + ch(0)).toString(16).slice(1);
+    }
+  }
+  return s[s.length - 1].hex;
+}
+// Fill a 256px ramp from the stops. The dome writes gl_FragColor raw, so store
+// the linear bytes (setStyle -> linear working space) exactly like the old
+// per-band THREE.Color uniforms did.
+function fillSkyRamp(tex, stops) {
+  const data = tex.image.data;
+  for (let i = 0; i < 256; i++) {
+    _rampCol.set(sampleStops(stops, i / 255));
+    data[i * 4] = Math.round(_rampCol.r * 255);
+    data[i * 4 + 1] = Math.round(_rampCol.g * 255);
+    data[i * 4 + 2] = Math.round(_rampCol.b * 255);
+    data[i * 4 + 3] = 255;
+  }
+  tex.needsUpdate = true;
+}
+
 function makeSky(scene) {
   const geo = new THREE.SphereGeometry(420, 24, 16);
+  const ramp = new THREE.DataTexture(new Uint8Array(256 * 4), 256, 1, THREE.RGBAFormat);
+  ramp.minFilter = ramp.magFilter = THREE.LinearFilter;
+  ramp.wrapS = ramp.wrapT = THREE.ClampToEdgeWrapping;
+  fillSkyRamp(ramp, DEFAULT_SKY_STOPS);
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
     uniforms: {
-      uTop: { value: new THREE.Color("#3f9bd8") },
-      uMid: { value: new THREE.Color("#a7dcef") },
-      uBot: { value: new THREE.Color("#ffe9c4") },
+      uRamp: { value: ramp },
       uSunDir: { value: new THREE.Vector3(0.5, 0.55, 0.35).normalize() },
+      // fog bleeds up from the horizon so the sky meets the fogged world
+      uFog: { value: new THREE.Color("#a7dcef") },
+      uFogAmt: { value: Math.min(1, Math.sqrt(0.0115 / 0.03)) },
     },
     vertexShader: /* glsl */ `
       varying vec3 vDir;
@@ -38,21 +87,29 @@ function makeSky(scene) {
       }
     `,
     fragmentShader: /* glsl */ `
-      uniform vec3 uTop; uniform vec3 uMid; uniform vec3 uBot; uniform vec3 uSunDir;
+      uniform sampler2D uRamp; uniform vec3 uSunDir;
+      uniform vec3 uFog; uniform float uFogAmt;
       varying vec3 vDir;
       void main() {
         float h = vDir.y;
-        vec3 col = h > 0.25 ? mix(uMid, uTop, smoothstep(0.25, 0.9, h))
-                            : mix(uBot, uMid, smoothstep(-0.1, 0.25, h));
+        // horizon (0) -> zenith (1); a touch below the horizon still reads sky
+        float tt = clamp((h + 0.1) / 1.1, 0.0, 1.0);
+        vec3 col = texture2D(uRamp, vec2(tt, 0.5)).rgb;
         // fat cartoon sun with a hard edge and a halo
         float d = distance(normalize(vDir), uSunDir);
         col = mix(col, vec3(1.0, 0.95, 0.75), smoothstep(0.075, 0.055, d));
         col += vec3(1.0, 0.9, 0.6) * smoothstep(0.4, 0.06, d) * 0.22;
+        // fog climbs the sky from the horizon; denser fog reaches higher and
+        // whitens even the zenith as it thickens
+        float top = mix(-0.05, 1.25, uFogAmt);
+        float f = smoothstep(top, top - mix(0.5, 0.2, uFogAmt), h);
+        col = mix(col, uFog, f * mix(0.85, 1.0, uFogAmt));
         gl_FragColor = vec4(col, 1.0);
       }
     `,
   });
   const sky = new THREE.Mesh(geo, mat);
+  sky.userData.rampTex = ramp;
   scene.add(sky);
   return sky;
 }
@@ -81,6 +138,13 @@ function makeClouds(scene) {
     const r = 120 + Math.random() * 160;
     cloud.position.set(Math.cos(a) * r, 38 + Math.random() * 30, Math.sin(a) * r);
     cloud.userData.speed = 0.4 + Math.random() * 0.7;
+    // per-cloud animation state: a slow bob up and down, and a lazy "breathing"
+    // scale pulse, each with its own phase so the pack never moves in lockstep.
+    cloud.userData.baseY = cloud.position.y;
+    cloud.userData.bobAmp = 0.8 + Math.random() * 1.6;
+    cloud.userData.bobFreq = 0.15 + Math.random() * 0.2;
+    cloud.userData.phase = Math.random() * Math.PI * 2;
+    cloud.userData.breathe = 0.04 + Math.random() * 0.05;
     group.add(cloud);
   }
   scene.add(group);
@@ -590,6 +654,20 @@ export class CourseMarkers {
     this.outcrops = [];
   }
 
+  getRockColor() { return "#" + _rockStone.getHexString(); }
+
+  /** repaint every rock outcrop (and its cel twin) from a single stone hue */
+  setRockColor(hex) {
+    _rockStone.set(hex);
+    for (const o of this.outcrops) {
+      const [stone, stoneDark] = o.mats; // [stone, stoneDark, moss]
+      stone.color.copy(_rockStone);
+      stoneDark.color.copy(_rockStone).multiplyScalar(0.72);
+      celMat(stone).color.copy(stone.color);
+      celMat(stoneDark).color.copy(stoneDark.color);
+    }
+  }
+
   setHole(path, islands, rocks = []) {
     // ---- buoys every ~9u along the polyline, skipping ends
     let placed = 0;
@@ -654,8 +732,8 @@ export class CourseMarkers {
     // wedges between an underwater camera and the rock it's tracking.
     this.outcrops = [];
     for (const o of rocks) {
-      const stone = new THREE.MeshStandardMaterial({ color: 0x7d8a90, flatShading: true });
-      const stoneDark = new THREE.MeshStandardMaterial({ color: 0x5d686e, flatShading: true });
+      const stone = new THREE.MeshStandardMaterial({ color: _rockStone.clone(), flatShading: true });
+      const stoneDark = new THREE.MeshStandardMaterial({ color: _rockStone.clone().multiplyScalar(0.72), flatShading: true });
       const moss = new THREE.MeshStandardMaterial({ color: 0x5da24e, flatShading: true });
       const g = new THREE.Group();
       // submerged root — the spire continues down to the lake bed, so the
@@ -847,7 +925,7 @@ export class RivalLines {
 export class World {
   constructor(scene) {
     this.scene = scene;
-    makeSky(scene);
+    this.sky = makeSky(scene);
     this.terrain = new Terrain(scene);
     this.trees = new Trees(scene);
     this.foliage = new Foliage(scene);
@@ -869,7 +947,30 @@ export class World {
     const hemi = new THREE.HemisphereLight(0xbfeaf5, 0x2a6448, 0.5);
     scene.add(hemi);
 
-    scene.fog = new THREE.Fog(0xa7dcef, 150, 400);
+    // Exponential fog so the tweak menu can drive a single "density" knob.
+    scene.fog = new THREE.FogExp2(0xa7dcef, 0.0115);
+  }
+
+  /** repaint the sky dome from an editable horizon->zenith gradient */
+  setSkyGradient(stops) {
+    this._skyStops = stops.map((s) => ({ t: s.t, hex: s.hex }));
+    fillSkyRamp(this.sky.userData.rampTex, this._skyStops);
+  }
+  getSkyGradient() {
+    return (this._skyStops || DEFAULT_SKY_STOPS).map((s) => ({ t: s.t, hex: s.hex }));
+  }
+
+  /** drive scene fog + the horizon fog band on the sky from one place */
+  setFog(hex, density) {
+    this.scene.fog.color.set(hex);
+    this.scene.fog.density = density;
+    const u = this.sky.material.uniforms;
+    u.uFog.value.set(hex);
+    // eased so the sky whitens noticeably across the slider's usable range
+    u.uFogAmt.value = Math.min(1, Math.sqrt(density / 0.03));
+  }
+  getFog() {
+    return { color: "#" + this.scene.fog.color.getHexString(), density: this.scene.fog.density };
   }
 
   /** rebuild the ground + grass for a hole's channel (null path => radial disc) */
@@ -887,8 +988,12 @@ export class World {
     this.course.update(dt, elapsed, water);
     for (const d of this.ducks) d.update(dt, elapsed, water);
     for (const c of this.clouds.children) {
-      c.position.x += c.userData.speed * dt;
+      const u = c.userData;
+      c.position.x += u.speed * dt;
       if (c.position.x > 300) c.position.x = -300;
+      c.position.y = u.baseY + Math.sin(elapsed * u.bobFreq + u.phase) * u.bobAmp;
+      const s = 1 + Math.sin(elapsed * u.bobFreq * 0.7 + u.phase) * u.breathe;
+      c.scale.set(s, s, s);
     }
   }
 

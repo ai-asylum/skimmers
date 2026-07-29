@@ -182,6 +182,33 @@ const TREE_SPECIES = [
   { model: "PineTree_3", h: [10, 15], y: [6, 34], weight: 0.7 },
 ];
 
+// Per-tree-geometry snapshot: a bark/leaf mask plus each vertex's baked
+// brightness (normalised around its group's mean). A vertex reads as "leaf"
+// when green clearly leads the other channels. The brightness lets an absolute
+// bark/leaf colour keep the original light/dark shading instead of going flat.
+const TREE_META = new WeakMap();
+function treeMeta(geo) {
+  let meta = TREE_META.get(geo);
+  if (!meta) {
+    const orig = geo.attributes.color.array;
+    const n = orig.length / 3;
+    const isLeaf = new Uint8Array(n);
+    const lum = new Float32Array(n);
+    let leafSum = 0, leafCount = 0, barkSum = 0, barkCount = 0;
+    for (let i = 0; i < n; i++) {
+      const r = orig[i * 3], g = orig[i * 3 + 1], b = orig[i * 3 + 2];
+      const l = 0.299 * r + 0.587 * g + 0.114 * b;
+      lum[i] = l;
+      if (g - Math.max(r, b) > 0.02) { isLeaf[i] = 1; leafSum += l; leafCount++; }
+      else { barkSum += l; barkCount++; }
+    }
+    meta = { isLeaf, lum, leafMean: leafSum / (leafCount || 1), barkMean: barkSum / (barkCount || 1) };
+    TREE_META.set(geo, meta);
+  }
+  return meta;
+}
+const _clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
 export class Trees {
   constructor(scene) {
     this.total = 110;
@@ -189,7 +216,41 @@ export class Trees {
     // Dead below a fifth of the tree's height so the trunk stays rooted, full by
     // the top: the trunk holds still and the canopy stirs.
     patchSway(mat, 0.022, 0.2, 1.0);
+    this.mat = mat;
     this.scatter = new Scatter(scene, TREE_SPECIES, 56, () => mat);
+    this.geos = TREE_SPECIES.map((s) => natureGeometry(s.model));
+    // default tree hues (the tweak menu can override them)
+    this.bark = "#a06b40";
+    this.leaf = "#659334";
+    this.setColors(this.bark, this.leaf);
+  }
+
+  getColors() { return { bark: this.bark, leaf: this.leaf }; }
+
+  /**
+   * Paint bark and canopy with two chosen colours. This replaces the baked
+   * palette hue outright — each vertex becomes its group's picked colour,
+   * scaled by the vertex's original brightness (normalised around the group
+   * mean) so the trees keep their light/dark shading instead of reading flat.
+   * The colour attribute is shared with the cel twin, so this repaints both
+   * the lit and toon passes.
+   */
+  setColors(barkHex, leafHex) {
+    this.bark = barkHex; this.leaf = leafHex;
+    const bark = new THREE.Color(barkHex), leaf = new THREE.Color(leafHex);
+    for (const geo of this.geos) {
+      const { isLeaf, lum, leafMean, barkMean } = treeMeta(geo);
+      const arr = geo.attributes.color.array;
+      for (let i = 0; i < isLeaf.length; i++) {
+        const leafy = isLeaf[i];
+        const t = leafy ? leaf : bark;
+        const s = lum[i] / (leafy ? leafMean : barkMean); // brightness around 1.0
+        arr[i * 3] = _clamp01(t.r * s);
+        arr[i * 3 + 1] = _clamp01(t.g * s);
+        arr[i * 3 + 2] = _clamp01(t.b * s);
+      }
+      geo.attributes.color.needsUpdate = true;
+    }
   }
 
   /** re-plant the forest on the grassy banks of the current hole */

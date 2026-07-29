@@ -44,10 +44,10 @@ function makeClumpGeometry(height, width) {
 export class Grass {
   // count scales with the scattered area (see setHole's maxR) so a hole that
   // runs corner to corner isn't grassed thinner than a compact one was
-  constructor(scene, { count = 11000, height = 1.15, bladeWidth = 0.17, color = 0x86b84f } = {}) {
+  constructor(scene, { count = 11000, height = 1.15, bladeWidth = 0.17, color = 0x8fdb5c } = {}) {
     this.cap = count;
     this.uTime = { value: 0 };
-    this.uWind = { value: 0.22 };
+    this.uWind = { value: 0.16 };
     this.uWindSpeed = { value: 1.8 };
     this.uWindDir = { value: new THREE.Vector2(0.8, 0.6).normalize() };
 
@@ -55,6 +55,7 @@ export class Grass {
     const mat = new THREE.MeshStandardMaterial({
       color, vertexColors: true, side: THREE.DoubleSide, roughness: 1, metalness: 0,
     });
+    this.mat = mat;
     mat.userData.noCel = true; // keep our own sway patch; don't let the cel pass replace it
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = this.uTime;
@@ -118,4 +119,12 @@ uniform float uTime; uniform float uWind; uniform float uWindSpeed; uniform vec2
   }
 
   update(elapsed) { this.uTime.value = elapsed; }
+
+  // ---- debug tweak-menu hooks ----
+  getColor() { return "#" + this.mat.color.getHexString(); }
+  setColor(hex) { this.mat.color.set(hex); }
+  getWind() { return this.uWind.value; }
+  setWind(v) { this.uWind.value = v; }
+  getWindSpeed() { return this.uWindSpeed.value; }
+  setWindSpeed(v) { this.uWindSpeed.value = v; }
 }
