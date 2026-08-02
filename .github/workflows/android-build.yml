@@ -74,7 +74,14 @@ jobs:
           if-no-files-found: error
 
       - name: Upload AAB to Play (internal track)
+        id: play_upload
         if: github.event_name == 'push' && env.HAS_PLAY_SA == 'true'
+        # Google requires the first upload of a new app to be made by hand in the
+        # Console, so until that happens the package does not exist and this step
+        # can only fail ("Package not found"). Set the repo variable
+        # PLAY_APP_LIVE=true right after that first manual upload to make failures
+        # here block again.
+        continue-on-error: ${{ vars.PLAY_APP_LIVE != 'true' }}
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
@@ -85,3 +92,8 @@ jobs:
           # Google review and no public exposure). The HUMAN gate is promoting
           # to closed/production in the Play Console — that's the submission.
           status: completed
+
+      - name: Explain a tolerated Play upload failure
+        if: steps.play_upload.outcome == 'failure'
+        run: |
+          echo "::notice::Play upload did not go through. Expected while the app does not exist in the Play Console yet — grab app-release.aab from this run's artifacts and upload it by hand once. Then run: gh variable set PLAY_APP_LIVE --repo ai-asylum/skimmers --body true"
