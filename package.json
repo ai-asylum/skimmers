@@ -6,7 +6,7 @@
     "dev": "vite",
     "dev:playable:skip": "vite --config vite.playable-skip.config.js",
     "dev:playable:craft": "vite --config vite.playable-craft.config.js",
-    "build": "vite build && cp -r store dist/store",
+    "build": "vite build && cp -r store dist/store && rm -f dist/store/*.md",
     "build:playable": "npm run build:playable:skip && npm run build:playable:craft",
     "build:playable:skip": "node scripts/build-playable-skip.mjs",
     "build:playable:craft": "node scripts/build-playable-craft.mjs",
