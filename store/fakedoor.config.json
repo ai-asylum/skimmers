@@ -30,9 +30,11 @@
   "legalUpdated": "23 July 2026",
   "histogram": [80, 12, 4, 2, 2],
   "screenshots": [
-    { "src": "./shots/01-race.webp", "alt": "Skippidy Skip — race across the lake to the flag" },
-    { "src": "./shots/02-chain-fire.webp", "alt": "Chain five hops and your rock catches fire" },
-    { "src": "./shots/03-paint.webp", "alt": "Hand-paint your stone before the race" }
+    { "src": "./shots/01-race.webp", "alt": "Race 8 rivals across the lake to the flag" },
+    { "src": "./shots/02-chain-fire.webp", "alt": "Chain every hop — flat, fast throws skip further" },
+    { "src": "./shots/03-paint.webp", "alt": "Paint your own stone before the race" },
+    { "src": "./shots/04-fish.webp", "alt": "Sank it? Steer the hook down and fish it back" },
+    { "src": "./shots/05-start.webp", "alt": "First stone to the flag wins" }
   ],
   "reviews": [
     { "initials": "TL", "author": "Theo L.", "fillPct": 100, "title": "One more throw", "when": "3d ago", "body": "The little plink when a skip chains is so satisfying. Splash-lobbed my mate under the water and never looked back." },
