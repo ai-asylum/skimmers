@@ -742,6 +742,10 @@ ui.els.muter.addEventListener("click", () => {
 // flow (start, clock, hole transitions, winner calls) and pilots the bots.
 const net = new Net();
 const MAX_RACERS = 8; // course + tint palette are sized for eight
+// net ids at or above this are the host's bots; below it they are people. Every
+// seat can tell the two apart from an id alone, which guests can't do any other
+// way — only the host holds the BotBrains.
+const BOT_ID_BASE = 100;
 const NET = {
   mode: "solo", // solo | host | guest
   myId: 0,
@@ -758,7 +762,7 @@ const capLabel = (cap) => (cap === 0 ? "OPEN ROOM" : `${capacityNum(cap)}-PLAYER
 let matchmaking = null;
 let chosenCap = 2;
 const PLAYER_TINTS = ["#ffd24a", "#ff5470", "#37c8e0", "#6fe07a", "#9d7cf4", "#ff8a3d", "#f4f0e6", "#e0503a"];
-const tintFor = (id) => (id >= 100 ? null : PLAYER_TINTS[id % PLAYER_TINTS.length]);
+const tintFor = (id) => (id >= BOT_ID_BASE ? null : PLAYER_TINTS[id % PLAYER_TINTS.length]);
 
 const lobbyEls = {
   panel: document.getElementById("lobby-panel"),
@@ -876,11 +880,18 @@ lobbyEls.mpCancel.addEventListener("click", () => {
 // already has a host with room, we join it; if a slot is empty, we claim it as
 // host; if it's full/busy we bump to the next slot. Whoever lands as host runs
 // the match exactly like the old "host a lobby" flow.
+// A slot can be registered on the broker and still be unreachable: the host
+// closed the tab, or the two networks can't be traversed. Signalling completes,
+// the data channel never opens, and PeerJS says nothing either way — no "open",
+// no "peer-unavailable". Every probe therefore runs against our own clock, or a
+// single dead slot parks the hunt on "finding a room…" forever.
+const PROBE_TIMEOUT = 10000;
+
 function startMatchmaking(cap) {
   NET.mode = "solo";
   NET.capacity = cap;
   NET.players.clear();
-  matchmaking = { cap, idx: 1, helloTimer: null };
+  matchmaking = { cap, idx: 1, helloTimer: null, probeTimer: null };
   lobbyEls.findBtn.classList.add("hidden");
   lobbyEls.mpBack.classList.add("hidden");
   lobbyEls.mpCancel.classList.remove("hidden");
@@ -890,7 +901,7 @@ function startMatchmaking(cap) {
 
 function cancelMatchmaking() {
   if (!matchmaking) return;
-  clearTimeout(matchmaking.helloTimer);
+  clearMatchTimers();
   matchmaking = null;
   net.close();
   NET.mode = "solo";
@@ -901,16 +912,33 @@ function cancelMatchmaking() {
   netStatus("");
 }
 
+function clearMatchTimers() {
+  if (!matchmaking) return;
+  clearTimeout(matchmaking.helloTimer);
+  clearTimeout(matchmaking.probeTimer);
+}
+
+/** give up on this slot and hunt the next one */
+function nextMatchSlot() {
+  if (!matchmaking) return;
+  clearMatchTimers();
+  matchmaking.idx++;
+  tryMatchSlot();
+}
+
 function tryMatchSlot() {
   if (!matchmaking) return;
   const { cap, idx } = matchmaking;
   if (idx > 40) { netStatus("all rooms are busy — try again in a bit"); cancelMatchmaking(); return; }
   netStatus(cap === 0 ? "finding an open room…" : `finding a ${capacityNum(cap)}-player room…`);
   const code = matchCode(cap, idx);
+  clearMatchTimers();
   net.close(); // drop any peer from the previous slot attempt
   attachNetHandlers();
+  matchmaking.probeTimer = setTimeout(nextMatchSlot, PROBE_TIMEOUT);
   net.joinRoom(code, (err) => {
     if (!matchmaking) { net.close(); return; }
+    clearTimeout(matchmaking.probeTimer); // the slot answered, one way or the other
     if (err) {
       if (err.type === "peer-unavailable") becomeMatchHost(code); // empty slot -> host it
       else setTimeout(() => { if (matchmaking) tryMatchSlot(); }, 400); // transient -> retry
@@ -919,18 +947,19 @@ function tryMatchSlot() {
     NET.mode = "guest";
     net.send({ t: "hello" });
     // if the host never answers (mid-start, flaky), roll to the next slot
-    matchmaking.helloTimer = setTimeout(() => {
-      if (matchmaking) { matchmaking.idx++; tryMatchSlot(); }
-    }, 4500);
+    matchmaking.helloTimer = setTimeout(nextMatchSlot, 4500);
   });
 }
 
 function becomeMatchHost(code) {
   if (!matchmaking) return;
+  clearMatchTimers();
   net.close();
   attachNetHandlers();
+  matchmaking.probeTimer = setTimeout(nextMatchSlot, PROBE_TIMEOUT); // claiming can stall too
   net.hostRoom(code, (err) => {
     if (!matchmaking) return;
+    clearTimeout(matchmaking.probeTimer);
     if (err) { // someone grabbed the slot first — go back to joining it
       net.close();
       setTimeout(() => { if (matchmaking) tryMatchSlot(); }, 250);
@@ -939,14 +968,16 @@ function becomeMatchHost(code) {
     NET.mode = "host";
     NET.myId = 0;
     NET.players.clear();
-    NET.players.set(0, { id: 0, name: "You", ready: false, cfg: null });
+    // guests see this name in their lobby list, so it has to read from the
+    // outside — the local list swaps in "YOU" by id, not by name
+    NET.players.set(0, { id: 0, name: "Skipper 1", ready: false, cfg: null });
     settleIntoRoom();
   });
 }
 
 // We've landed in a room (as host or guest); leave the title and start prepping.
 function settleIntoRoom() {
-  if (matchmaking) clearTimeout(matchmaking.helloTimer);
+  clearMatchTimers();
   matchmaking = null;
   netStatus("");
   lobbyEls.code.textContent = capLabel(NET.capacity);
@@ -1050,7 +1081,7 @@ function handleHostMsg(from, msg) {
     case "knock": {
       const victimId = msg.victim;
       if (victimId === 0) G.player?.applyKnock(new THREE.Vector3(msg.from[0], 0, msg.from[1]));
-      else if (victimId >= 100) NET.byId.get(victimId)?.applyKnock(new THREE.Vector3(msg.from[0], 0, msg.from[1]));
+      else if (victimId >= BOT_ID_BASE) NET.byId.get(victimId)?.applyKnock(new THREE.Vector3(msg.from[0], 0, msg.from[1]));
       else net.sendTo(victimId, msg);
       break;
     }
@@ -1070,10 +1101,7 @@ function handleGuestMsg(msg) {
     case "full":
       // this slot can't take us — keep hunting for another room
       if (matchmaking) {
-        clearTimeout(matchmaking.helloTimer);
-        net.close();
-        matchmaking.idx++;
-        tryMatchSlot();
+        nextMatchSlot();
       } else {
         netStatus("that race already started — try again");
         net.close();
@@ -1602,7 +1630,7 @@ function hostStartRace() {
   const humans = [...NET.players.values()];
   const botCount = Math.max(0, MAX_RACERS - humans.length);
   const bots = BOT_PERSONAS.slice(0, botCount).map((persona, i) => ({
-    id: 100 + i, name: persona.name, color: persona.color, seed: 1000 + i * 77,
+    id: BOT_ID_BASE + i, name: persona.name, color: persona.color, seed: 1000 + i * 77,
   }));
   net.broadcast({
     t: "start",
@@ -1772,7 +1800,7 @@ function updateShape(dt) {
     const dx = pointer.x - pd.lastX;
     const dy = pointer.y - pd.lastY;
     rock.group.rotation.y += dx * 0.009;
-    rock.group.rotation.x = clamp(rock.group.rotation.x - dy * 0.006, -1.2, 1.2);
+    rock.group.rotation.x = clamp(rock.group.rotation.x + dy * 0.006, -1.2, 1.2);
     pd.lastX = pointer.x;
     pd.lastY = pointer.y;
     pd.spinVel = 0; // no coasting — the rock holds where you leave it
@@ -1888,7 +1916,7 @@ function updatePaint(dt) {
     const dx = pointer.x - pd.lastX;
     const dy = pointer.y - pd.lastY;
     rock.group.rotation.y += dx * 0.009;
-    rock.group.rotation.x = clamp(rock.group.rotation.x - dy * 0.006, -0.85, 0.85);
+    rock.group.rotation.x = clamp(rock.group.rotation.x + dy * 0.006, -0.85, 0.85);
     pd.lastX = pointer.x;
     pd.lastY = pointer.y;
     pd.spinVel = 0; // hold the rock still where you leave it
@@ -2210,7 +2238,7 @@ function onSkimmerEvent(type, data) {
       if (!s.isRemote && victim.isRemote && NET.mode !== "solo") {
         const msg = { t: "knock", victim: victim.netId, from: [s.pos.x, s.pos.z] };
         if (NET.mode === "host") {
-          if (victim.netId >= 100) NET.byId.get(victim.netId)?.applyKnock(s.pos);
+          if (victim.netId >= BOT_ID_BASE) NET.byId.get(victim.netId)?.applyKnock(s.pos);
           else net.sendTo(victim.netId, msg);
         } else net.send(msg);
       }
@@ -2349,9 +2377,13 @@ function declareHoledOut(s, tapeOverride = null) {
   else if (people.length && people.every((h) => h.finished)) endHole("playersIn");
 }
 
-/** the stones with a person behind them — everyone in G.racers that isn't a bot */
+/**
+ * The stones with a person behind them — everyone in G.racers that isn't a bot.
+ * Only the host runs BotBrains, so G.bots is empty on a guest and can't be the
+ * whole test; net ids identify the host's bots from any seat.
+ */
 function humanRacers() {
-  return G.racers.filter((s) => !G.bots.some((b) => b.s === s));
+  return G.racers.filter((s) => s.netId < BOT_ID_BASE && !G.bots.some((b) => b.s === s));
 }
 
 /** one stone drops into the whirlpool: bookkeeping plus the noise it deserves */

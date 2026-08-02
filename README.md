@@ -10,11 +10,13 @@ skip it across a lake full of rivals, boats, islands and ducks.
 
 ## Multiplayer
 
-Serverless WebRTC (PeerJS): **Host a lobby**, share the 4-letter room code,
-friends hit **Join**. Everyone preps their own rock while the lobby fills;
-empty seats become bots (up to 8 racers). Each player's stone runs full
-physics on their own machine — throws feel instant — while positions and
-events stream peer-to-peer. The host referees: match clock, hole
+Serverless WebRTC (PeerJS): pick a room size and hit **Find match**. There is
+no matchmaking server either — everyone hunting for a room of that size probes
+the same well-known peer ids, joining the first one with a free seat and
+claiming it themselves if it's empty. Everyone preps their own rock while the
+lobby fills; empty seats become bots (up to 8 racers). Each player's stone
+runs full physics on their own machine — throws feel instant — while positions
+and events stream peer-to-peer. The host referees: match clock, hole
 transitions, winner calls, and the bot fleet.
 
 ## How to play

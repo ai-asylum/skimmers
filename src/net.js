@@ -34,6 +34,16 @@ export function matchCode(capacity, idx) {
   return `mm-${capacity}-${idx}`;
 }
 
+/** wrap a callback so only the first verdict gets through */
+function settleOnce(fn) {
+  let done = false;
+  return (arg) => {
+    if (done) return;
+    done = true;
+    fn?.(arg);
+  };
+}
+
 class PeerTransport {
   constructor() {
     this.onOpen = null;
@@ -101,8 +111,12 @@ export class Net {
     const peer = new Peer(peerIdForRoom(code), { debug: 1 });
     const transports = new Set();
     let closed = false;
-    peer.on("open", () => onReady?.(null));
-    peer.on("error", (e) => onReady?.(e));
+    // onReady answers "did claiming this room work?", once. The broker keeps
+    // emitting on the peer for the life of the room (a guest failing to reach
+    // us, a signalling blip), and those are not a verdict on the claim.
+    const settle = settleOnce(onReady);
+    peer.on("open", () => settle(null));
+    peer.on("error", (e) => settle(e));
     peer.on("connection", (conn) => {
       if (closed) { conn.close(); return; }
       const tr = new PeerTransport();
@@ -135,15 +149,23 @@ export class Net {
     this.role = "guest";
     this.code = code;
     const tr = new PeerTransport();
+    // Same one-shot rule as hostRoom, and it matters more here: the caller
+    // treats a verdict as "this probe is over" and closes the session, so a
+    // late broker error reaching onReady would hang up on a room we are
+    // happily playing in. Once the channel is up, only the channel's own
+    // close/error (-> onDown) may end the session.
+    const settle = settleOnce(onReady);
     tr.peer = new Peer({ debug: 1 });
     tr.onMessage = (d) => this.onMessage?.(0, d);
-    tr.onClose = () => this.onDown?.();
+    // only the channel we are actually playing on may report the host as gone;
+    // a probe from an earlier slot dying must not evict us from this room
+    tr.onClose = () => { if (this.hostConn === tr) this.onDown?.(); };
     tr.peer.on("open", () => {
       const conn = tr.peer.connect(peerIdForRoom(code), { reliable: true });
-      tr.onOpen = () => onReady?.(null);
+      tr.onOpen = () => settle(null);
       tr._bindConn(conn);
     });
-    tr.peer.on("error", (e) => onReady?.(e));
+    tr.peer.on("error", (e) => settle(e));
     this.hostConn = tr;
   }
 
