@@ -16,8 +16,8 @@ click, check, and paste three values back. Canonical long-form answers live in
 - App name: `Skippidy Skip`
 - Package id: `games.misaligned.skippidyskip`
 - Privacy policy URL: `https://skimmers-lake.vercel.app/store/privacy.html`
-  (served from `dist/store/` after the Vite build — verify it returns 200 on the
-  production deploy once this PR merges)
+  (served from `dist/store/` after the Vite build — ✅ verified 200 on the
+  production deploy, along with `/store/terms.html`)
 - Store listing copy: `store/PLAY-LISTING.md` + `store/fakedoor.config.json`
 
 ## 0. Blocking pre-reqs before secrets/build do anything
@@ -43,6 +43,10 @@ click, check, and paste three values back. Canonical long-form answers live in
 - [ ] Target audience / child-directed declarations → `store/PLAY-LISTING.md` §App content
 - [ ] **First AAB upload is manual** (Google rule): grab `app-release.aab` from the
       latest `Android Build` workflow artifacts → internal testing track
+- [ ] **Right after that first upload**, arm the CI upload gate:
+      `gh variable set PLAY_APP_LIVE --repo ai-asylum/skimmers --body true`.
+      Until it is set, CI tolerates the "Package not found" upload failure so the
+      build stays green; once set, a broken upload reddens CI again.
 - [ ] **Also create a CLOSED testing release before going for production** —
       promote the same build to a closed track and select the org's EXISTING
       "founding team" tester group (~7 people — already set up; do NOT create a
