@@ -22,14 +22,14 @@ click, check, and paste three values back. Canonical long-form answers live in
 
 ## 0. Blocking pre-reqs before secrets/build do anything
 
-- [ ] **Create the PostHog project** (EU cloud) named "Skippidy Skip", then
-      `gh secret set VITE_POSTHOG_KEY --repo ai-asylum/skimmers --body "<phc_...>"`
-      and `gh secret set VITE_POSTHOG_HOST --repo ai-asylum/skimmers --body "https://eu.i.posthog.com"`.
-      (Wiring is done; no key was available at build time, so the app is
-      analytics-off until this is set — see PLAY-LISTING.md.)
-- [ ] **Store art** — add `store/icon.webp` + `store/shots/*.webp` (≥2, 9:16) and a
-      1024×500 feature graphic via the `store-assets` skill. Needed for the Play
-      upload and to make the fake-door `store/index.html` render cleanly.
+- [x] **PostHog project** — ✅ done: "Skippidy Skip" on EU cloud (project id
+      239165), with `VITE_POSTHOG_KEY` and `VITE_POSTHOG_HOST` set as repo
+      secrets and the key confirmed baked into the release APK. The build
+      collects, so use the "collects data" Data Safety answers.
+- [x] **Store art** — ✅ done: `store/icon.webp` + five dressed 9:16 shots in
+      `store/shots/` for the fake door, and Play-uploadable JPEGs + a 1024×500
+      feature graphic in `media/store-upload/`. **Upload to Play from
+      `media/store-upload/`** — Play rejects the WebP the fake door uses.
 
 ## 1. Google Play Console (no API for any of this)
 - [ ] Create app → name/package above, Game, Free

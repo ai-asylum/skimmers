@@ -19,10 +19,11 @@ gated on `VITE_POSTHOG_KEY`.
 > collected" and drop the analytics paragraph from the privacy policy. Set it and
 > the "collects data" section below applies.
 >
-> ⚠️ **PostHog project not yet created** — no `POSTHOG_PERSONAL_API_KEY` was
-> available at wiring time and the PostHog MCP has no project-create tool. Create
-> the "Skippidy Skip" project (EU cloud) and set repo secret `VITE_POSTHOG_KEY`
-> (+ `VITE_POSTHOG_HOST=https://eu.i.posthog.com`). Until then the app is analytics-off.
+> ✅ **PostHog project created** — "Skippidy Skip" on EU cloud, project id
+> **239165**. `VITE_POSTHOG_KEY` and `VITE_POSTHOG_HOST` are set as repo secrets,
+> and the key is confirmed baked into the release APK. The shipped build
+> therefore **does** collect — answer Data Safety with the "collects data"
+> section below, not "No data collected".
 
 ---
 
@@ -31,13 +32,18 @@ gated on `VITE_POSTHOG_KEY`.
 1. **Package name** — ✅ done: `games.misaligned.skippidyskip` in
    `capacitor.config.json` and `android/app/build.gradle` (`applicationId` +
    `namespace`). Permanent Play URL once uploaded.
-2. **Store assets** — ⚠️ needed: `store/icon.webp` + `store/shots/*.webp`
-   (≥2 phone screenshots, 9:16 WebP) and a feature graphic (1024×500). Use the
-   `store-assets` skill. `store/fakedoor.config.json` already references
-   `shots/01-race.webp`, `02-chain-fire.webp`, `03-paint.webp`.
+2. **Store assets** — ✅ done, in two places for two consumers:
+   - **Fake-door page** (published): `store/icon.webp` + five dressed 9:16
+     WebP shots in `store/shots/`, all listed in `store/fakedoor.config.json`.
+   - **Play Console upload** (never published — kept out of `store/` so the
+     build doesn't copy it into `dist/` and the APK): `media/store-upload/`
+     holds the same five shots as **JPEG** plus `feature.png` and `icon.png`.
+     Play rejects WebP, so upload from `media/store-upload/`, not `store/`.
+
+   Captured from the running game with Playwright at 1152×2048 and dressed
+   via the `store-assets` skill.
 3. **Privacy policy URL** — `https://skimmers-lake.vercel.app/store/privacy.html`
-   (generated, served from `dist/store/` after the Vite build). Confirm it
-   returns 200 on the production deploy before submitting.
+   ✅ verified 200 on the production deploy (as is `/store/terms.html`).
 
 ---
 
@@ -91,9 +97,9 @@ Welcome to Skippidy Skip 1.0 — grind a flat one, chain your hops, and race fri
 
 | Asset | Spec | Status |
 |---|---|---|
-| App icon | 512×512, 32-bit PNG, ≤1 MB | source `media/icon.png` (1024²); export 512 |
-| Feature graphic | 1024×500 PNG/JPEG | ⚠️ needed |
-| Phone screenshots (2–8) | PNG/JPEG for Play (WebP only for the fake door) | ⚠️ needed — capture race / on-fire chain / painting |
+| App icon | 512×512, 32-bit PNG, ≤1 MB | ✅ `media/store-upload/icon.png` (from `media/icon.png`) |
+| Feature graphic | 1024×500 PNG/JPEG | ✅ `media/store-upload/feature.png` |
+| Phone screenshots (2–8) | PNG/JPEG for Play (WebP only for the fake door) | ✅ five JPEGs in `media/store-upload/` — race / chain / paint / fishing / start line |
 
 ---
 
