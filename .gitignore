@@ -2,9 +2,16 @@
 node_modules/
 .vercel
 
-# Vite build output
+# Vite build output. The playable outDirs stopped matching `dist-playable/` when
+# the ad was split into craft and skip slices, so a build's worth of copied
+# assets — the licensed chrome below among them — got committed by accident.
 dist/
-dist-playable/
+dist-playable*/
+
+# Casual Blue chrome, pulled in by `npm run cb:sync`. Licensed art: we may ship
+# it inside the game but not put the raw files in a public repo, and this one is
+# public. See NOTICE-casual-blue.md.
+public/cb/
 
 # Capacitor / Android build artifacts (android/ itself is checked in)
 android/app/build/
