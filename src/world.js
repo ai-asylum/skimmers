@@ -9,11 +9,12 @@ import * as THREE from "three";
 import { HOOK_SPEED } from "./fishing.js";
 import {
   LAKE_R, WATER_Y, lakeDepthAt, sunkRestY, SWELL_GLSL, WAVE_AMP,
-  VORTEX_R, VORTEX_THROAT_R, VORTEX_DEPTH, vortexSurfaceY,
+  VORTEX_R, VORTEX_THROAT_R, VORTEX_DEPTH, vortexSurfaceY, waterLevelAt,
 } from "./water.js";
-import { Terrain, terrainHeightAt } from "./terrain.js";
+import { Terrain, terrainHeightAt, ISLE_SQUASH, ISLE_SINK } from "./terrain.js";
 import { Grass } from "./grass.js";
 import { Trees, Foliage, updateWind } from "./foliage.js";
+import { HoleProps } from "./props.js";
 import { celMat } from "./celshader.js";
 
 const INK = 0x16324a;
@@ -382,8 +383,9 @@ export class WhirlpoolHole {
   }
 
   setPosition(x, z) {
-    // the dish adds the swell itself, per-vertex, so the group sits dead level
-    this.group.position.set(x, WATER_Y, z);
+    // the dish adds the swell itself, per-vertex, so the group sits dead level —
+    // on whichever terrace the flag was planted in
+    this.group.position.set(x, waterLevelAt(x, z), z);
     this.group.visible = true;
   }
 
@@ -417,6 +419,12 @@ export class WhirlpoolHole {
 // edge. Bobs gently on the swell like the flag buoy.
 // deck-top height above the waterline — physics seats resting tee rocks here
 export const PONTOON_DECK = 0.57;
+// The traffic light that opens a hole used to hang over the front of this
+// bridge — first on a steel gantry, then as a card floating in the air off the
+// end of it. Both put the one thing every player has to read in whatever corner
+// of the screen the camera happened to leave it. It is screen-space UI now
+// (index.html #start-signal, driven by ui.setStartLights), so the tee is just
+// a tee again.
 
 export class Pontoon {
   constructor(scene) {
@@ -489,7 +497,7 @@ export class Pontoon {
    *  is rigid — no wave sway — with each pile stretched down to whatever is
    *  under it: the lake bed in the water, the sand where it meets the beach. */
   setPose(x, z, angleToFlag) {
-    this.group.position.set(x, WATER_Y + PONTOON_DECK - 0.12, z);
+    this.group.position.set(x, waterLevelAt(x, z) + PONTOON_DECK - 0.12, z);
     this.group.rotation.y = -angleToFlag; // world +X row rotates to face the flag
     this.group.visible = true;
     this.group.updateMatrixWorld(true);
@@ -593,7 +601,7 @@ class Duck {
     this.scare = Math.max(0, this.scare - dt * 0.7);
     p.x += Math.cos(this.heading) * sp * dt;
     p.z += Math.sin(this.heading) * sp * dt;
-    p.y = WATER_Y + water.heightAt(p.x, p.z, elapsed) + 0.02;
+    p.y = waterLevelAt(p.x, p.z) + water.heightAt(p.x, p.z, elapsed) + 0.02;
     this.group.rotation.y = -this.heading;
     this.group.rotation.z = Math.sin(elapsed * 3 + p.x) * 0.06;
     this.wings[0].rotation.x = 0;
@@ -627,29 +635,15 @@ class Duck {
 }
 
 // ------------------------------------------------------------------ course markers
-// Fairway buoys strung along the hole's path + island rest stops. Rebuilt per hole.
+// Island rest stops and the rock spires between them. Rebuilt per hole.
+//
+// Nothing marks the shortcut. It is water that goes where the river does not,
+// and that is the only sign it gets: read the lake, or don't take it.
 export class CourseMarkers {
   constructor(scene) {
     this.scene = scene;
-    // buoy pool
-    this.buoys = [];
-    const buoyMat = new THREE.MeshStandardMaterial({ color: 0xff8a3d, flatShading: true });
-    const tipMat = new THREE.MeshStandardMaterial({ color: 0xfdf6e3, flatShading: true });
-    for (let i = 0; i < 26; i++) {
-      const g = new THREE.Group();
-      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.38, 8, 6), buoyMat);
-      ball.position.y = 0.1;
-      g.add(ball);
-      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.5, 6), tipMat);
-      tip.position.y = 0.55;
-      g.add(tip);
-      g.visible = false;
-      scene.add(g);
-      this.buoys.push(g);
-    }
     this.islandGroup = new THREE.Group();
     scene.add(this.islandGroup);
-    this._bobPhases = this.buoys.map(() => Math.random() * 10);
     // big rock outcrops we can fade when they block an underwater camera
     this.outcrops = [];
   }
@@ -668,26 +662,7 @@ export class CourseMarkers {
     }
   }
 
-  setHole(path, islands, rocks = []) {
-    // ---- buoys every ~9u along the polyline, skipping ends
-    let placed = 0;
-    for (let seg = 0; seg < path.length - 1 && placed < this.buoys.length; seg++) {
-      const a = path[seg], b = path[seg + 1];
-      const len = Math.hypot(b.x - a.x, b.z - a.z);
-      const n = Math.max(1, Math.round(len / 9));
-      for (let k = 1; k < n && placed < this.buoys.length; k++) {
-        const t = k / n;
-        const x = a.x + (b.x - a.x) * t;
-        const z = a.z + (b.z - a.z) * t;
-        // don't drop a buoy on an island
-        if (islands.some((isl) => Math.hypot(x - isl.x, z - isl.z) < isl.r + 1.5)) continue;
-        const g = this.buoys[placed++];
-        g.position.set(x, 0, z);
-        g.visible = true;
-      }
-    }
-    for (let i = placed; i < this.buoys.length; i++) this.buoys[i].visible = false;
-
+  setHole(islands, rocks = []) {
     // ---- islands (rebuilt fresh; tiny geometry)
     this.islandGroup.clear();
     const sand = new THREE.MeshStandardMaterial({ color: 0xeed9a4, flatShading: true });
@@ -695,9 +670,11 @@ export class CourseMarkers {
     const trunk = new THREE.MeshStandardMaterial({ color: 0x9a6b3a, flatShading: true });
     for (const isl of islands) {
       const g = new THREE.Group();
+      // the shape physics beaches stones on (terrain.js islandRise), so the
+      // sand a stone sits on is the sand you can see
       const dome = new THREE.Mesh(new THREE.SphereGeometry(isl.r, 14, 9), sand);
-      dome.scale.y = 0.32;
-      dome.position.y = -isl.r * 0.1;
+      dome.scale.y = ISLE_SQUASH;
+      dome.position.y = -isl.r * ISLE_SINK;
       g.add(dome);
       // grass tufts
       for (let i = 0; i < 3; i++) {
@@ -723,7 +700,7 @@ export class CourseMarkers {
       palm.rotation.z = 0.16;
       palm.position.set(-isl.r * 0.3, isl.r * 0.12, 0);
       g.add(palm);
-      g.position.set(isl.x, 0, isl.z);
+      g.position.set(isl.x, waterLevelAt(isl.x, isl.z), isl.z);
       this.islandGroup.add(g);
     }
 
@@ -766,7 +743,7 @@ export class CourseMarkers {
       cap.scale.y = 0.4;
       cap.position.y = o.h * 0.98;
       g.add(cap);
-      g.position.set(o.x, 0, o.z);
+      g.position.set(o.x, waterLevelAt(o.x, o.z), o.z);
       this.islandGroup.add(g);
       this.outcrops.push({ x: o.x, z: o.z, r: o.r, mats: [stone, stoneDark, moss], op: 1 });
     }
@@ -807,15 +784,6 @@ export class CourseMarkers {
     }
   }
 
-  update(dt, elapsed, water) {
-    for (let i = 0; i < this.buoys.length; i++) {
-      const g = this.buoys[i];
-      if (!g.visible) continue;
-      g.position.y = water.heightAt(g.position.x, g.position.z, elapsed) * 1.3;
-      g.rotation.z = Math.sin(elapsed * 1.6 + this._bobPhases[i]) * 0.12;
-      g.rotation.x = Math.cos(elapsed * 1.3 + this._bobPhases[i]) * 0.1;
-    }
-  }
 }
 
 // ------------------------------------------------------------------ rival fishing lines
@@ -934,21 +902,70 @@ export class World {
     this.flag = new WhirlpoolHole(scene);
     this.pontoon = new Pontoon(scene);
     this.course = new CourseMarkers(scene);
+    this.props = new HoleProps(scene);
     this.ducks = [new Duck(scene), new Duck(scene), new Duck(scene)];
 
-    // mood lighting rig: warm key, cool fill, low ambient (team scrap)
+    // mood lighting rig: warm key, cool fill, low ambient (team scrap). Kept on
+    // the world so a biome (biomes.js) can put a different weather over the
+    // same lake — the key is the sun, so it moves with setSunDir.
     const key = new THREE.DirectionalLight(0xfff2d8, 1.9);
     key.position.set(60, 80, 40);
     scene.add(key);
     const fill = new THREE.DirectionalLight(0x9fd0ff, 0.55);
     fill.position.set(-50, 30, -60);
     scene.add(fill);
-    scene.add(new THREE.AmbientLight(0x88aabb, 0.5));
+    const ambient = new THREE.AmbientLight(0x88aabb, 0.5);
+    scene.add(ambient);
     const hemi = new THREE.HemisphereLight(0xbfeaf5, 0x2a6448, 0.5);
     scene.add(hemi);
+    this.lights = { key, fill, ambient, hemi };
 
     // Exponential fog so the tweak menu can drive a single "density" knob.
     scene.fog = new THREE.FogExp2(0xa7dcef, 0.0115);
+  }
+
+  /**
+   * Repoint the rig. Each part is optional and each field of it is too, so a
+   * biome states only what it changes:
+   *   { key:{hex,i}, fill:{hex,i}, ambient:{hex,i}, hemi:{sky,ground,i} }
+   */
+  setLights(spec = {}) {
+    const put = (light, s) => {
+      if (!s) return;
+      if (s.hex != null) light.color.set(s.hex);
+      if (s.i != null) light.intensity = s.i;
+    };
+    put(this.lights.key, spec.key);
+    put(this.lights.fill, spec.fill);
+    put(this.lights.ambient, spec.ambient);
+    const h = spec.hemi;
+    if (h) {
+      if (h.sky != null) this.lights.hemi.color.set(h.sky);
+      if (h.ground != null) this.lights.hemi.groundColor.set(h.ground);
+      if (h.i != null) this.lights.hemi.intensity = h.i;
+    }
+  }
+
+  /**
+   * Move the sun. The dome paints it, the key light casts from it and the lake
+   * catches it, so all three read the same direction — put it low and the whole
+   * scene turns evening at once.
+   */
+  setSunDir(x, y, z, water = null) {
+    const dir = new THREE.Vector3(x, y, z).normalize();
+    this.sky.material.uniforms.uSunDir.value.copy(dir);
+    this.lights.key.position.copy(dir).multiplyScalar(110);
+    water?.setSunDir?.(dir.x, dir.y, dir.z);
+  }
+  getSunDir() { return this.sky.material.uniforms.uSunDir.value.clone(); }
+
+  /** tint the cloud pack — white in fair weather, ash grey under a storm */
+  setCloudColor(hex) {
+    // every blob shares one material, so the first one is the whole sky
+    const mat = this.clouds.children[0]?.children[0]?.material;
+    if (!mat) return;
+    mat.color.set(hex);
+    celMat(mat).color.copy(mat.color);
   }
 
   /** repaint the sky dome from an editable horizon->zenith gradient */
@@ -973,19 +990,24 @@ export class World {
     return { color: "#" + this.scene.fog.color.getHexString(), density: this.scene.fog.density };
   }
 
-  /** rebuild the ground + grass for a hole's channel (null path => radial disc) */
-  setHole(path, halfWidth) {
-    this.terrain.setPath(path, halfWidth);
+  /**
+   * Rebuild the ground, the grass and the hole's furniture for a channel (null
+   * path => radial disc, and no furniture). The terrain goes first because
+   * props.js reads the bank height back out of it to stand mills on.
+   */
+  setHole(path, halfWidth, hole = null) {
+    this.terrain.setPath(path, halfWidth, hole?.branches);
     this.trees.setHole();
     this.foliage.setHole();
     this.grass.setHole();
+    this.props.setHole(path ? hole : null, halfWidth);
   }
 
-  update(dt, elapsed, water) {
+  update(dt, elapsed, water, particles) {
     updateWind(elapsed);
     this.grass.update(elapsed);
     this.flag.update(dt, elapsed, water);
-    this.course.update(dt, elapsed, water);
+    this.props.update(dt, elapsed, particles);
     for (const d of this.ducks) d.update(dt, elapsed, water);
     for (const c of this.clouds.children) {
       const u = c.userData;
