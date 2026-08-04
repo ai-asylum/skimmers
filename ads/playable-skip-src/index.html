@@ -91,7 +91,7 @@
   /* ---------- phase header (find/shape/paint) ---------- */
   #phase-ui { z-index: 30; display: flex; flex-direction: column; align-items: center; }
   #phase-title {
-    margin-top: 4vh;
+    margin-top: 11vh;
     font-size: clamp(34px, 7.4vw, 72px); font-weight: 900; color: var(--paper);
     -webkit-text-stroke: 4px var(--ink);
     paint-order: stroke fill;
@@ -114,16 +114,6 @@
     display: flex; flex-direction: column; align-items: center; gap: 10px;
   }
 
-  /* stat bars for the rock */
-  #rock-stats { display: flex; gap: 18px; background: rgba(253,246,227,0.92); padding: 12px 20px; border-radius: 18px;
-    box-shadow: 0 4px 0 rgba(22,50,74,0.6), 0 10px 20px rgba(0,0,0,0.3); }
-  .stat { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 90px; }
-  .stat label { font-size: 12px; font-weight: 900; letter-spacing: 0.1em; }
-  .stat .bar { width: 100%; height: 12px; background: #d8ccb1; border-radius: 6px; overflow: hidden; border: 2px solid var(--ink); }
-  .stat .bar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.15s ease; }
-  .stat.flat .bar i { background: var(--accent2); }
-  .stat.grit .bar i { background: var(--gold); }
-
   #phase-buttons { display: flex; gap: 10px; align-items: center; justify-content: center; }
 
   /* ---------- rock shelf: name plates floating over the bench slots ---------- */
@@ -139,7 +129,6 @@
     box-shadow: 0 4px 0 rgba(22,50,74,0.5), 0 8px 16px rgba(0,0,0,0.3);
     transition: transform 0.1s ease, background 0.15s ease;
   }
-  .rock-tag .sub { font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.65; }
   .rock-tag:hover { transform: translate(-50%, -50%) translateY(-3px) scale(1.05); }
   .rock-tag.sel { background: var(--gold); transform: translate(-50%, -50%) translateY(-4px) scale(1.07); }
 
@@ -175,8 +164,17 @@
   #name-input:focus { outline: 3px solid var(--gold); }
   .btn.danger { background: var(--danger); box-shadow: 0 4px 0 #b93a52, 0 8px 14px rgba(0,0,0,0.3); }
   .btn.danger:active { box-shadow: 0 2px 0 #b93a52, 0 4px 10px rgba(0,0,0,0.35); }
-  /* letting a rock go is a side door, not the main one — say it quietly */
-  #shelf-release { font-size: 13px; padding: 7px 18px; opacity: 0.92; }
+  /* Letting a rock go belongs to that rock, not to the phase, so the button
+     sits just under the chosen stone's floater (ui.js parks it there). */
+  #shelf-release {
+    position: fixed; z-index: 26;
+    font-size: 13px; padding: 5px 16px 7px; opacity: 0.95;
+    transform: translate(-50%, 0);
+  }
+  #shelf-release:hover { transform: translate(-50%, 0) translateY(-2px); }
+  #shelf-release:active { transform: translate(-50%, 0) translateY(3px); }
+  /* nothing to ride on: the chosen stone swung behind the camera */
+  #shelf-release.no-anchor { display: none; }
 
   /* ---------- paint booth, Snapchat style ----------
      No palette panel: the stone keeps the whole screen and the tools hug the
@@ -284,7 +282,8 @@
     animation: finIn 0.4s cubic-bezier(0.18, 1.4, 0.4, 1) both;
   }
   .fin-row.me { background: var(--gold); color: var(--ink); text-shadow: none; }
-  .fin-row .medal { font-size: 17px; line-height: 1; min-width: 20px; text-align: center; }
+  .fin-row .medal { font-size: 12px; font-weight: 900; line-height: 1; min-width: 24px; text-align: center; opacity: 0.75; }
+  .fin-row .medal.top { font-size: 14px; opacity: 1; }
   .fin-row .dot { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid rgba(0,0,0,0.45); }
   @keyframes finIn { 0% { transform: translateX(40px) scale(0.85); opacity: 0; } 100% { opacity: 1; } }
 
@@ -302,6 +301,71 @@
   #hole-timer.urgent { background: rgba(255,84,112,0.85); }
   #hole-timer.urgent #hole-timer-val { animation: tick 1s steps(1, end) infinite; }
   @keyframes tick { 0%, 60% { opacity: 1; } 61%, 100% { opacity: 0.45; } }
+
+  /* start signal — the traffic light that opens a hole (main.js runs the count,
+     ui.setStartLights works it). It hung over the tee in the world until the
+     camera proved it could put it anywhere on screen it liked; up here it is
+     the same size in the same corner every time, which is the whole job. The
+     corner is free because the shell HUD goes down for a race. */
+  #start-signal {
+    --d: clamp(26px, 6.4vw, 38px);
+    position: absolute;
+    top: max(14px, env(safe-area-inset-top));
+    left: max(14px, env(safe-area-inset-left));
+    display: flex; flex-direction: column; gap: calc(var(--d) * 0.26);
+    padding: calc(var(--d) * 0.3); border-radius: calc(var(--d) * 0.75);
+    background: linear-gradient(180deg, rgba(16,52,74,0.8), rgba(8,26,42,0.84));
+    border: 2px solid rgba(253,246,227,0.5);
+    box-shadow: 0 5px 14px rgba(0,0,0,0.4), inset 0 2px 0 rgba(255,255,255,0.16);
+    opacity: 0; transform: translateY(-10px) scale(0.88);
+    transition: opacity 0.25s ease, transform 0.3s cubic-bezier(0.18, 1.4, 0.4, 1);
+  }
+  #start-signal.up { opacity: 1; transform: none; }
+
+  /* One lamp: a domed radial gradient for the glass, the sky caught across the
+     top of it (::before) and the hard pinpoint of the sun under that (::after).
+     A broad soft highlight plus one small sharp one is what stops a flat circle
+     reading as a flat circle. Lit, it takes its own colour and grows two
+     box-shadow halos — fake bloom, for nothing, and it can go brighter than the
+     real thing because nothing else on screen has to survive the exposure. */
+  #start-signal .lamp {
+    position: relative; width: var(--d); height: var(--d); border-radius: 50%;
+    background: radial-gradient(circle at 38% 30%, var(--off), #09121b 82%);
+    box-shadow: inset 0 0 0 2px rgba(0,0,0,0.5), inset 0 -3px 5px rgba(159,216,255,0.16);
+    transition: background 0.1s linear;
+  }
+  #start-signal .lamp::before {
+    content: ""; position: absolute; left: 15%; top: 7%; width: 70%; height: 33%;
+    border-radius: 50% 50% 70% 70% / 50% 50% 100% 100%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.5), rgba(255,255,255,0.04));
+  }
+  #start-signal .lamp::after {
+    content: ""; position: absolute; left: 21%; top: 19%; width: 25%; height: 15%;
+    border-radius: 50%; background: rgba(255,255,255,0.7);
+  }
+  #start-signal .red { --off: #46232a; --on: #ff3a2c; --glow: 255,58,44; }
+  #start-signal .amber { --off: #453423; --on: #ffab1a; --glow: 255,171,26; }
+  #start-signal .green { --off: #22412c; --on: #3ceb5b; --glow: 60,235,91; }
+  #start-signal .lamp.on {
+    background: radial-gradient(circle at 38% 30%, #fff, var(--on) 52%, var(--on));
+    animation:
+      lampPop 0.34s cubic-bezier(0.2, 1.5, 0.4, 1),
+      lampBreathe 1.4s ease-in-out 0.34s infinite alternate;
+  }
+  @keyframes lampPop {
+    0% { transform: scale(0.84);
+         box-shadow: inset 0 0 0 2px rgba(0,0,0,0.35), 0 0 4px 1px rgba(var(--glow),0.9); }
+    45% { transform: scale(1.17);
+          box-shadow: inset 0 0 0 2px rgba(0,0,0,0.35),
+                      0 0 16px 6px rgba(var(--glow),1), 0 0 42px 17px rgba(var(--glow),0.6); }
+    100% { transform: scale(1); }
+  }
+  @keyframes lampBreathe {
+    from { box-shadow: inset 0 0 0 2px rgba(0,0,0,0.35),
+                       0 0 9px 2px rgba(var(--glow),0.8), 0 0 22px 7px rgba(var(--glow),0.4); }
+    to { box-shadow: inset 0 0 0 2px rgba(0,0,0,0.35),
+                     0 0 14px 4px rgba(var(--glow),0.95), 0 0 36px 13px rgba(var(--glow),0.6); }
+  }
 
   /* combo popups + floating text */
   #popups { z-index: 25; overflow: hidden; }
@@ -472,7 +536,8 @@
     border: 3px solid var(--ink); font-weight: 900; font-size: 20px;
     box-shadow: 0 4px 0 rgba(22,50,74,0.55), 0 8px 16px rgba(0,0,0,0.3);
   }
-  #shell-hud .ico { font-size: 20px; }
+  #shell-hud .ico { display: flex; color: #e8a33d; }
+  #shell-hud .ico .ico-svg { width: 21px; height: 21px; }
   #shell-hud.punch { animation: shellPunch 0.45s cubic-bezier(0.2,1.6,0.4,1); }
   @keyframes shellPunch {
     0% { transform: scale(1); }
@@ -516,6 +581,12 @@
   }
   .socket.full:hover { transform: translateY(-2px); }
   .socket .ico { font-size: 24px; line-height: 1.1; }
+  /* a fitted socket shows the upgrade's own art (metaui renderSockets) */
+  .socket .ico.art {
+    width: 46px; height: 30px; border-radius: 8px;
+    background-image: var(--art); background-size: cover; background-position: center;
+    box-shadow: inset 0 0 0 2px rgba(22,50,74,0.25);
+  }
   .socket .nm { font-weight: 900; font-size: 15px; }
   .socket .rm { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.55; }
 
@@ -530,6 +601,8 @@
   }
   .meta-tab.sel { background: var(--accent2); }
   .meta-tab:hover { transform: translateY(-2px); }
+  .meta-tab .ico { display: flex; }
+  .meta-tab .ico-svg { width: 15px; height: 15px; }
 
   /* the card grid */
   /* min-height:0 or the flex child refuses to shrink and the panel clips the
@@ -561,7 +634,10 @@
     background: linear-gradient(#eaf6fb, #cde5f1);
     box-shadow: inset 0 0 0 2px rgba(22,50,74,0.1);
   }
-  .card-shot.live { font-size: 0; }
+  /* the 3D pass takes the box over and the placeholder glyph steps aside */
+  .card-shot.live .shot-ghost { display: none; }
+  .shot-ghost { display: flex; color: rgba(22,50,74,0.3); }
+  .shot-ghost .ico-svg { width: 30px; height: 30px; }
   .card.equipped .card-shot { background: linear-gradient(#fff6d8, #ffe6a2); }
   #preview-gl { position: fixed; z-index: 45; pointer-events: none; display: none; }
   .card-nm { font-weight: 900; font-size: 15px; line-height: 1.1; }
@@ -570,6 +646,9 @@
     font-size: 11.5px; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase;
     margin-top: 3px;
   }
+  /* a price is the shell mark and the number, kept on one baseline */
+  .card-foot .cost { display: inline-flex; align-items: center; gap: 4px; }
+  .card-foot .cost .ico-svg { width: 13px; height: 13px; color: #e8a33d; }
   .card.owned { background: #eef7fb; }
   .card.owned .card-foot { color: #1d8fa3; }
   .card.equipped { background: var(--gold); box-shadow: 0 4px 0 #c99a1d; }
@@ -610,6 +689,10 @@
   .pick.tier.sel { background: var(--tier); box-shadow: 0 4px 0 rgba(22,50,74,0.45); }
   .pick.tier .pick-nm { font-size: 20px; }
   .ico-lock { width: 11px; height: 11px; flex: none; }
+  /* every drawn glyph out of icons.js — sized by whatever it sits in */
+  .ico-svg { width: 16px; height: 16px; flex: none; display: block; }
+  #garage-btn { display: inline-flex; align-items: center; gap: 7px; }
+  #garage-btn .ico-svg { width: 15px; height: 15px; }
   .place-pip {
     width: 8px; height: 8px; border-radius: 50%; flex: none;
     background: var(--pip); box-shadow: 0 0 0 1.5px rgba(8,24,40,0.4);
@@ -662,6 +745,8 @@
     animation: payIn 0.35s ease forwards;
   }
   .pay-row .amt { font-weight: 900; color: #1d8fa3; }
+  .pay-row .amt.shells { display: inline-flex; align-items: center; gap: 5px; }
+  .pay-row .amt .ico-svg { width: 15px; height: 15px; color: #e8a33d; }
   .pay-row.total {
     border-top: 2.5px dashed rgba(22,50,74,0.35); margin-top: 4px; padding-top: 5px;
     font-size: 17px;
@@ -682,12 +767,10 @@
     #shell-hud { font-size: 17px; padding: 5px 13px 5px 10px; }
     #patterns { max-width: 92vw; }
     .pattern-chip { padding: 8px 13px; font-size: 11.5px; }
-    #rock-stats { gap: 10px; padding: 10px 14px; }
-    .stat { min-width: 66px; }
   }
   /* ---------- short windows (landscape phones) ---------- */
   @media (max-height: 560px) {
-    #phase-title { margin-top: 1.5vh; }
+    #phase-title { margin-top: 5vh; }
     #color-bar { height: 62vh; }
     #size-bar { height: 46vh; }
   }
@@ -722,6 +805,16 @@
   }
   .playable-cta:active { transform: translateY(4px); box-shadow: 0 3px 0 #c99a1d, 0 6px 12px rgba(0,0,0,0.4); }
   @keyframes ctaPulse { 0%,100% { transform: scale(1) rotate(-1deg); } 50% { transform: scale(1.06) rotate(1deg); } }
+  /* the way back into the course. Deliberately the lake's blue and a size down
+     from the CTA: it's the second thing you should see on this card, not the
+     first, but it has to be unmissable enough that nobody quits at hole two */
+  #pl-endcard .pl-next {
+    font-family: inherit; font-weight: 900; letter-spacing: 0.05em; text-transform: uppercase;
+    font-size: clamp(17px, 3.6vw, 25px); color: var(--paper); background: #1f8fc4;
+    padding: 14px 44px; border-radius: 60px; cursor: pointer; pointer-events: auto;
+    box-shadow: 0 6px 0 #14607f, 0 12px 24px rgba(0,0,0,0.38);
+  }
+  #pl-endcard .pl-next:active { transform: translateY(3px); box-shadow: 0 3px 0 #14607f, 0 6px 12px rgba(0,0,0,0.38); }
   #pl-endcard .pl-retry { font-size: 15px; font-weight: 800; color: var(--paper); opacity: 0.85;
     background: rgba(10,42,61,0.6); border: 2px solid rgba(253,246,227,0.35); border-radius: 40px;
     padding: 9px 26px; cursor: pointer; pointer-events: auto; }
@@ -749,6 +842,11 @@
 
 <!-- race HUD -->
 <div id="race-hud" class="layer hidden">
+  <div id="start-signal">
+    <i class="lamp red"></i>
+    <i class="lamp amber"></i>
+    <i class="lamp green"></i>
+  </div>
   <canvas id="minimap" width="190" height="190"></canvas>
   <div id="finishers" class="hidden"></div>
   <div id="hole-timer" class="hidden">
@@ -765,11 +863,6 @@
   <button id="phase-back" class="btn small blue hidden" aria-label="back">←</button>
   <div id="phase-title">FIND YOUR ROCK</div>
   <div id="phase-bottom">
-    <div id="rock-stats" class="hidden">
-      <div class="stat flat"><label>FLAT</label><div class="bar"><i id="stat-flat"></i></div></div>
-      <div class="stat heft"><label>HEFT</label><div class="bar"><i id="stat-heft"></i></div></div>
-      <div class="stat grit"><label>GRIT</label><div class="bar"><i id="stat-grit"></i></div></div>
-    </div>
     <div id="paint-ui" class="hidden">
       <div id="color-bar" class="paint-slider" role="slider" tabindex="0"
            aria-label="paint colour" aria-valuemin="0" aria-valuemax="100" aria-valuenow="15">
@@ -786,9 +879,8 @@
       <input id="name-input" type="text" maxlength="20" autocomplete="off" spellcheck="false" aria-label="name your rock">
       <button id="name-ok" class="btn small">Save it →</button>
     </div>
-    <button id="shelf-release" class="btn small danger hidden">Toss it back</button>
     <div id="phase-buttons">
-      <button id="garage-btn" class="btn small blue hidden">🔧 Garage</button>
+      <button id="garage-btn" class="btn small blue hidden"><span class="ico" data-icon="wrench"></span>Garage</button>
       <button id="phase-next" class="btn small hidden">Next →</button>
     </div>
   </div>
@@ -796,6 +888,7 @@
 
 <!-- name plates over the bench slots, and the finger that points at a free one -->
 <div id="shelf-tags" class="layer"></div>
+<button id="shelf-release" class="btn small danger hidden">Toss away</button>
 <img id="tap-hand" class="hidden" alt="" draggable="false">
 
 <!-- title (pre-hidden in the playable — we drop straight into the skip race) -->
@@ -837,7 +930,7 @@
 </div>
 
 <!-- shells: the career currency, on screen everywhere but mid-race -->
-<div id="shell-hud" class="hidden"><span class="ico">🐚</span><span id="shell-count">0</span></div>
+<div id="shell-hud" class="hidden"><span class="ico" data-icon="shell"></span><span id="shell-count">0</span></div>
 
 <!-- the garage: two upgrade sockets, hats, floaters and trails for one stone -->
 <div id="garage-ui" class="layer meta-scrim hidden">
@@ -853,17 +946,26 @@
   </div>
 </div>
 
-<!-- cup + class picker -->
+<!-- Cup + class picker. The ad never opens it — a playable goes straight to its
+     own levels — but metaui.js is shared with the full game and wires this
+     chrome at module load, so the ids have to be here. Unstyled on purpose:
+     this shell predates the Casual Blue skin the picker is drawn in. -->
 <div id="cup-ui" class="layer meta-scrim hidden">
   <div class="meta-panel">
     <div class="meta-head">
-      <div class="meta-title">Pick your cup</div>
+      <div class="meta-title" id="cup-title">Pick your cup</div>
       <button id="cup-close" class="btn small blue">← Bench</button>
     </div>
-    <div id="cup-list" class="meta-row"></div>
-    <div class="meta-label">Class</div>
-    <div id="tier-list" class="meta-row"></div>
-    <button id="cup-go" class="btn">Race! →</button>
+    <div id="cup-steps" class="step-bar"></div>
+    <div id="cup-body" class="step-body">
+      <div id="cup-list" class="pick-grid cups"></div>
+      <div id="tier-list" class="pick-grid tiers"></div>
+      <div id="cup-summary" class="go-pane"></div>
+    </div>
+    <div class="step-foot">
+      <button id="cup-back" class="btn small white">← Back</button>
+      <button id="cup-go" class="btn blue">Next →</button>
+    </div>
   </div>
 </div>
 
@@ -900,14 +1002,16 @@
 </button>
 <div id="wipe" class="layer"></div>
 
-<!-- playable install end card (shown by main.js via __playableEnd__ when the race ends) -->
+<!-- playable install card (shown by main.js via __playableEnd__ at the end of
+     every hole, not just the last — see showPlayableCard) -->
 <div id="pl-endcard" class="hidden">
   <img src="/media/logo.png" alt="Skippidy Skip" draggable="false">
   <div class="pl-head" id="pl-headline">NICE SKIP!</div>
-  <div class="pl-sub">Race friends across a lake full of rivals, boats &amp; ducks.</div>
+  <div class="pl-sub" id="pl-subhead">Race friends across a lake full of rivals, boats &amp; ducks.</div>
   <a id="pl-cta" class="playable-cta"
      href="https://play.google.com/store/apps/details?id=games.misaligned.skippidyskip"
      data-store-url="https://play.google.com/store/apps/details?id=games.misaligned.skippidyskip">Get the full game</a>
+  <div class="pl-next hidden" id="pl-next">Next level →</div>
   <div class="pl-retry" id="pl-retry">Skip again</div>
 </div>
 
@@ -928,9 +1032,6 @@
     document.addEventListener('pointerdown', function arm() {
       document.removeEventListener('pointerdown', arm);
       track('CHALLENGE_STARTED');
-      setTimeout(function () { track('CHALLENGE_PASS_25'); }, 30000);
-      setTimeout(function () { track('CHALLENGE_PASS_50'); }, 90000);
-      setTimeout(function () { track('CHALLENGE_PASS_75'); }, 300000);
     });
 
     function openStore(url) {
@@ -954,15 +1055,46 @@
       openStore(a.getAttribute('data-store-url'));
     });
 
-    // main.js (__PLAYABLE_SKIP__ build) calls this when the race ends.
-    window.__playableEnd__ = function (won) {
+    // How far into the five-hole course someone got, reported on the milestones
+    // the network already understands. These used to be wall-clock timers, which
+    // measured how long the ad was left open rather than how much of it was played.
+    var PASS = { 1: 'CHALLENGE_PASS_25', 2: 'CHALLENGE_PASS_50', 3: 'CHALLENGE_PASS_75' };
+    var endcardSeen = false;
+
+    // main.js (__PLAYABLE_SKIP__ build) calls this at the end of every hole.
+    // info: { level, levels, hasNext } — hasNext is false on the last one.
+    window.__playableEnd__ = function (won, info) {
+      var lvl = (info && info.level) || 1;
+      var levels = (info && info.levels) || 1;
+      var hasNext = !!(info && info.hasNext);
       var card = document.getElementById('pl-endcard');
       var head = document.getElementById('pl-headline');
-      if (head) head.textContent = won ? 'YOU WON THE HOLE!' : 'SO CLOSE!';
+      var sub = document.getElementById('pl-subhead');
+      var next = document.getElementById('pl-next');
+      var retry = document.getElementById('pl-retry');
+      if (head) {
+        head.textContent = hasNext
+          ? (won ? 'LEVEL ' + lvl + ' CLEARED!' : 'LEVEL ' + lvl + ' DONE')
+          : (won ? 'YOU WON THE CUP!' : 'SO CLOSE!');
+      }
+      if (sub) {
+        sub.textContent = hasNext
+          ? 'Level ' + (lvl + 1) + ' of ' + levels + ' up next'
+          : 'Race friends across a lake full of rivals, boats & ducks.';
+      }
+      if (next) next.classList.toggle('hidden', !hasNext);
+      // starting over is only an offer worth making once there's nothing left to play
+      if (retry) retry.classList.toggle('hidden', hasNext);
       if (card) card.classList.remove('hidden');
-      track(won ? 'CHALLENGE_SOLVED' : 'CHALLENGE_FAILED');
-      track('ENDCARD_SHOWN');
+      if (hasNext) { if (PASS[lvl]) track(PASS[lvl]); }
+      else track(won ? 'CHALLENGE_SOLVED' : 'CHALLENGE_FAILED');
+      if (!endcardSeen) { endcardSeen = true; track('ENDCARD_SHOWN'); }
     };
+
+    document.getElementById('pl-next').addEventListener('click', function () {
+      document.getElementById('pl-endcard').classList.add('hidden');
+      try { window.__playableNext__ && window.__playableNext__(); } catch (_) { /* never break the ad */ }
+    });
 
     document.getElementById('pl-retry').addEventListener('click', function () {
       track('CHALLENGE_RETRY');
