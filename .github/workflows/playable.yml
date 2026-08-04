@@ -28,6 +28,9 @@ on:
       - "package*.json"
   pull_request:
     branches: [main]
+  # The paths filter above means a change to this workflow doesn't exercise it,
+  # so there has to be a way to ask for a run on purpose.
+  workflow_dispatch:
 
 concurrency:
   group: playable-${{ github.ref }}
