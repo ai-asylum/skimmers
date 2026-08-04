@@ -9,6 +9,8 @@
  * Camera: camRig (world placement) > shakeRig (trauma shake) > camera,
  * per the Spellbook engine layering. Hitstop scales sim time, UI keeps real dt.
  */
+import { chromeMissing } from "./cb/index.js"; // the Casual Blue skin: palette, display face, sprite classes
+
 import * as THREE from "three";
 import {
   hitstop, slowmo, updateTime, shake, applyShake, fovKick, updateFovKick,
@@ -18,7 +20,7 @@ import { audio } from "./audio.js";
 import { CelShader } from "./celshader.js";
 import { addOutline } from "./outline.js";
 import { Particles } from "./particles.js";
-import { Water, WATER_Y, LAKE_R, VORTEX_R } from "./water.js";
+import { Water, WATER_Y, LAKE_R, VORTEX_R, waterLevelAt, getWaterFalls } from "./water.js";
 import { World, shoreHeight, RivalLines, PONTOON_DECK } from "./world.js";
 import { Boats } from "./boats.js";
 import { RockBench, rockLift } from "./bench.js";
@@ -32,9 +34,13 @@ import { Skimmer, simulateThrow, BLAST_R, SKIP_ELEV, MAX_ELEV } from "./physics.
 import { BotBrain, BOT_PERSONAS } from "./bots.js";
 import { Fishing, BUOY_REST } from "./fishing.js";
 import { Minimap } from "./minimap.js";
-import { HOLES } from "./holes.js";
+import { HOLES, holeFalls, holeZones } from "./holes.js";
+import { buildRoute } from "./route.js";
+import { BIOMES, BIOME_IDS, DEFAULT_BIOME, applyBiome, biomeFor } from "./biomes.js";
+import { PLAYABLE_HOLES } from "./playable-levels.js";
 import { Net, matchCode } from "./net.js";
 import * as ui from "./ui.js";
+import * as hints from "./hints.js";
 import * as metaui from "./metaui.js";
 import {
   loadMeta, shells, addShells, loadoutFor, clearLoadout, cupRecord, recordCup, resetMeta,
@@ -106,15 +112,35 @@ const IS_PLAYABLE = IS_PLAYABLE_SKIP || IS_PLAYABLE_CRAFT;
 // only wired up when served locally, never in production.
 const IS_LOCALHOST = /^(localhost|127\.0\.0\.1|\[?::1\]?|.*\.local)$/i.test(location.hostname)
   || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname);
-if (!IS_PLAYABLE && IS_LOCALHOST) initTweakMenu({ scene, world, water });
-if (IS_PLAYABLE_SKIP) {
-  HOLES.length = 0;
-  HOLES.push({
-    time: 60,
-    path: [{ x: 0, z: 34 }, { x: 0, z: 4 }, { x: 0, z: -30 }],
-    islands: [],
-    rocks: [{ x: 12, z: 9, r: 3, h: 6 }, { x: -12, z: -11, r: 3, h: 6 }],
+if (!IS_PLAYABLE && IS_LOCALHOST) {
+  // The level jumper reaches into the race, so it gets accessors rather than
+  // values: this runs before COURSE and G exist, and the menu only ever calls
+  // them from a click.
+  initTweakMenu({
+    scene, world, water,
+    course: {
+      racing: () => G.state === "race",
+      holes: () => COURSE,
+      at: () => G.hole,
+      goto: (i) => gotoHole(Math.max(0, Math.min(COURSE.length - 1, i))),
+      load: (cupIdx, tierIdx) => {
+        // set the same four fields the cup picker does, so the results screen
+        // and the next visit to the picker agree about what was just raced
+        G.cupIdx = cupIdx;
+        G.tierIdx = tierIdx;
+        G.cup = CUPS[cupIdx];
+        G.tier = TIERS[tierIdx];
+        COURSE = buildCourse(G.cup, G.tier);
+        gotoHole(0);
+      },
+      onUnlock: () => { metaui.syncShells(); metaui.refreshCupSelect(); },
+    },
   });
+}
+if (IS_PLAYABLE_SKIP) {
+  // the ad runs its own five-hole teaching course instead of the authored one
+  HOLES.length = 0;
+  HOLES.push(...PLAYABLE_HOLES);
 }
 
 /**
@@ -125,12 +151,43 @@ if (IS_PLAYABLE_SKIP) {
  */
 let COURSE = HOLES;
 
+/**
+ * The current hole boiled down to what the simulation actually collides with,
+ * baked once per hole by `bakeHoleGeometry`.
+ *
+ * Two things make this worth having. A bridge or a cave contributes cylinders
+ * and roof slabs of its own (props.js), and they are indistinguishable from
+ * authored spires once they are in the list — so piers CLONK, show on the aim
+ * preview and get respected by the bots without a line of new code anywhere
+ * else. And on a hole that runs downhill the ground is not at zero: every
+ * height in holes.js is written against its own pool, and gets stood on its
+ * terrace here rather than at each of the dozen places that reads one.
+ */
+const HOLE = { islands: [], solids: [], ceilings: [] };
+
 // The hole doesn't close behind the first stone in. Dropping in starts the
 // final stretch instead: everyone else has this long to hole out too, and the
 // order they drop in is the order they score (holePoints). It's a deadline for
 // the players, not a wait — the hole is called the moment they're all home. The
 // ad slice runs a short one so its end-card isn't two minutes away.
 const FINAL_STRETCH = IS_PLAYABLE_SKIP ? 15 : 120;
+
+// A hole starts on the lights: the traffic light in the top-left corner of the
+// HUD (index.html #start-signal) runs red, orange, green, and the hole is on the
+// instant it turns green — the clock starts, the rivals go, and the stone is
+// yours to throw. Up to that point nobody can do anything, which is the point —
+// everyone leaves the bridge on the same signal, so a place lost off the line
+// was lost fairly.
+//
+// The count waits for the intro flyover to put the camera down behind the stone
+// (CAM_INTRO_DUR), because a start signal nobody is looking at is not one.
+//
+// It runs in every mode. This replaced an open-ended wait for the player's own
+// first throw, which was kinder to a stranger meeting the controls in an ad —
+// the trade is deliberate: a race that starts when you happen to be ready is
+// not a race, and the rivals now leave the line with you rather than after you.
+const LIGHTS_GO = 3; // the stage the green comes up on: red, orange, go
+const LIGHTS_STEP = 0.7; // seconds each colour holds before the next takes over
 /** what a hole is worth from a given finishing place; stones still on the water
  * at the bell score nothing, so any stone in the hole beats any stone out of it */
 const holePoints = (place) => Math.max(1, G.racers.length - place + 1);
@@ -151,8 +208,8 @@ function holeLength(idx) {
   for (let i = 1; i < p.length; i++) d += Math.hypot(p[i].x - p[i - 1].x, p[i].z - p[i - 1].z);
   return d;
 }
-/** Point on the fairway centreline — the line the buoys are strung along — at
- * arc distance `d` from the tee. Distances off either end extrapolate along the
+/** Point on the fairway centreline at arc distance `d` from the tee.
+ * Distances off either end extrapolate along the
  * end leg, so a camera can sit behind the tee or aim past the flag. */
 function pathPointAtDist(d, idx = G.hole, out = new THREE.Vector3()) {
   const p = COURSE[idx].path;
@@ -168,6 +225,32 @@ function pathPointAtDist(d, idx = G.hole, out = new THREE.Vector3()) {
   }
   return out.set(p[0].x, 0, p[0].z);
 }
+/**
+ * The hole boiled down to a circle on the water: centre, radius, and the
+ * bearing of the tee end. It's what a camera has to frame to show the whole
+ * thing at once, and it lets a short hole and a long one get the same shot.
+ * Filled into a scratch object — called once a frame during the flyover.
+ */
+const holeFrame = { cx: 0, cz: 0, r: 1, teeAng: 0 };
+function holeFraming(idx = G.hole) {
+  const p = COURSE[idx].path;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const q of p) {
+    if (q.x < minX) minX = q.x;
+    if (q.x > maxX) maxX = q.x;
+    if (q.z < minZ) minZ = q.z;
+    if (q.z > maxZ) maxZ = q.z;
+  }
+  holeFrame.cx = (minX + maxX) / 2;
+  holeFrame.cz = (minZ + maxZ) / 2;
+  // the banks sit a channel-width off the centreline, and the tee deck a little
+  // further, so the circle has to be wider than the path's own box
+  holeFrame.r = Math.hypot(maxX - minX, maxZ - minZ) / 2 + (COURSE[idx].width ?? 12);
+  // out from the tee, away from the opening leg: where the flyover comes to
+  // rest, which is roughly where the aim camera already lives
+  holeFrame.teeAng = Math.atan2(p[0].z - p[1].z, p[0].x - p[1].x);
+  return holeFrame;
+}
 
 // ------------------------------------------------------------------ game state
 const G = {
@@ -178,6 +261,9 @@ const G = {
   holeWinner: null, // first stone in — it takes the star and the camera
   holeFinishers: [], // every stone that holed out, in the order it did
   holeOver: false, // hole is called: clock stopped, no more throws
+  startHold: false, // on the line: rivals, clock and your own throw all parked
+  lightsT: 0, // seconds into the start sequence; only runs once the flyover lands
+  lightsStage: -1, // colour currently up, so the head is only touched when it changes
   player: null, // Skimmer
   playerRock: null, // Rock (chosen in FIND)
   bots: [], // BotBrain[]
@@ -185,6 +271,7 @@ const G = {
   candidates: [], // FIND-phase rocks
   candidateIdx: -1,
   sinkers: [], // passed-over candidates on their way down into the sand
+  tosses: [], // released bench stones mid-flight, on their way into the lake
   shapeHold: new THREE.Vector3(), // where SHAPE floats the stone: arm's length from the camera
   shelf: [], // saved-rock entries per bench slot (see shelf.js), null where empty
   shelfRocks: new Array(SHELF_SLOTS).fill(null), // the Rocks those entries grew into
@@ -363,9 +450,18 @@ const cam = {
   fromLook: new THREE.Vector3(),
   panT: 0,
   panDur: 1,
+  introHaze: 1, // fog scale — the flyover thins it, see camUpdate
+  introFog: null, // the biome's own fog, to thin from and land back on
 };
-// how far down the buoy line the hole-intro camera looks ahead of itself
-const CAM_INTRO_LEAD = 13;
+// The opening flyover: a high orbit around the whole hole that swoops down onto
+// the tee at the end. Distance and height are multiples of the hole's own
+// bounding radius, so every hole gets the same framing.
+const CAM_INTRO_DUR = 3.6; // seconds before the aim camera takes over
+const CAM_INTRO_SWEEP = Math.PI * 0.8; // how far round the hole the orbit swings
+const CAM_INTRO_DIST = 1.45; // camera distance from the centre, in hole radii
+const CAM_INTRO_PITCH = 0.72; // ~41 degrees above the water
+const CAM_INTRO_BIAS = 0.16; // look this far short of the centre, in hole radii
+const CAM_INTRO_HAZE = 0.4; // biome fog is thinned to this while we're up there
 
 /** cut straight to a framed shot (used under a wipe, where no one can see it) */
 function camSnapTo(pos, look) {
@@ -387,8 +483,49 @@ function camPanTo(pos, look, dur = 1.4) {
   cam.mode = "pan";
 }
 
+// how much headroom the camera keeps under a cave roof
+const CAM_ROOF_GAP = 1.1;
+/**
+ * The cave roof over this spot, or Infinity out in the daylight. Same slabs the
+ * stone is tested against (props.js publishes them, physics.js hitCeiling reads
+ * them), so the camera ducks under exactly the arch you can see. Bridges and
+ * fallen trees are left out: you pass those in a moment, and a camera that
+ * dropped for every plank would spend the hole bobbing.
+ */
+function caveRoofAt(x, z) {
+  let y = Infinity;
+  for (const c of HOLE.ceilings) {
+    if (c.kind !== "cave") continue;
+    const px = x - c.x, pz = z - c.z;
+    if (Math.abs(px * c.ux + pz * c.uz) > c.half) continue;
+    if (Math.abs(px * c.uz - pz * c.ux) > c.span) continue;
+    if (c.y < y) y = c.y;
+  }
+  return y;
+}
+
+/** where the opening flyover sits at normalised time `t`: high up, circling in */
+function introOrbitPose(t, idx = G.hole) {
+  const e = t * t * (3 - 2 * t);
+  const f = holeFraming(idx);
+  const ang = f.teeAng - CAM_INTRO_SWEEP * (1 - e);
+  const dist = f.r * CAM_INTRO_DIST * lerp(1, 0.86, e); // drifts in as it swings
+  const cos = Math.cos(ang), sin = Math.sin(ang);
+  return {
+    pos: new THREE.Vector3(
+      f.cx + cos * dist * Math.cos(CAM_INTRO_PITCH),
+      dist * Math.sin(CAM_INTRO_PITCH),
+      f.cz + sin * dist * Math.cos(CAM_INTRO_PITCH)
+    ),
+    // aim short of the centre rather than at it: seen from up here the near half
+    // of the hole eats the bottom of the frame, and this pushes it back in
+    look: new THREE.Vector3(f.cx + cos * f.r * CAM_INTRO_BIAS, 0, f.cz + sin * f.r * CAM_INTRO_BIAS),
+  };
+}
+
 function camUpdate(dt) {
   let targetPos = cam.pos, targetLook = cam.look;
+  let haze = 1;
   const p = G.player;
 
   if (cam.mode === "orbit") {
@@ -396,24 +533,24 @@ function camUpdate(dt) {
     targetPos = new THREE.Vector3(Math.cos(a) * 70, 30, Math.sin(a) * 70);
     targetLook = new THREE.Vector3(0, -4, 0);
   } else if (cam.mode === "intro" && p) {
-    // hole-intro flyover: back away from the flag to your stone along the buoy
-    // line itself, rather than the tee->flag chord, so the sweep reads the route
-    // you have to thread — doglegs included — with the buoys passing underneath.
+    // hole-intro flyover: an orbit high enough over the lake to hold the whole
+    // hole in frame at once — every leg of the route, both banks and the flag
+    // around the dogleg — before dropping onto the tee for the throw.
     G.introT += dt;
-    const t = clamp01(G.introT / 2.6);
-    const e = t * t * (3 - 2 * t);
-    const d = lerp(holeLength(G.hole) - CAM_INTRO_LEAD, -6.5, e);
-    targetPos = pathPointAtDist(d).setY(lerp(7, 3.4, e));
-    // keep the look point that far further down the line: the camera faces the
-    // hole the whole way back instead of swinging round at the end
-    targetLook = pathPointAtDist(d + CAM_INTRO_LEAD).setY(lerp(3.5, 1.2, e));
-    // ease into the exact "aim" pose (facing the first island) over the tail of
+    const t = clamp01(G.introT / CAM_INTRO_DUR);
+    const pose = introOrbitPose(t);
+    targetPos = pose.pos;
+    targetLook = pose.look;
+    // swoop into the exact "aim" pose (facing the first island) over the tail of
     // the sweep so the handoff at t=1 doesn't jump
-    const hand = clamp01((t - 0.72) / 0.28);
+    const hand = clamp01((t - 0.55) / 0.45);
     if (hand > 0) {
       const h = hand * hand * (3 - 2 * hand);
       targetPos.lerp(p.pos.clone().addScaledVector(G.aimDir, -6.5).add(new THREE.Vector3(0, 3.4, 0)), h);
       targetLook.lerp(p.pos.clone().addScaledVector(G.aimDir, 10).add(new THREE.Vector3(0, 1.2, 0)), h);
+      haze = lerp(CAM_INTRO_HAZE, 1, h);
+    } else {
+      haze = CAM_INTRO_HAZE;
     }
     if (t >= 1) cam.mode = "aim";
   } else if (cam.mode === "aim" && p) {
@@ -457,21 +594,51 @@ function camUpdate(dt) {
     : cam.mode === "replay" ? 6
     : cam.mode === "aim" && drag.active ? 6.5
     : 3.6;
+  // A cave is a lid as well as a floor, and the shot has to go under it. Duck
+  // the target for both ends of the shot — where the rig is heading and what it
+  // is watching — so a stone in the tunnel is followed from inside the mouth
+  // rather than from up in the headland it bored through.
+  let targetY = targetPos.y; // (targetPos can be cam.pos itself — never write to it)
+  if (cam.mode !== "fishing") {
+    const roof = Math.min(caveRoofAt(targetPos.x, targetPos.z), caveRoofAt(targetLook.x, targetLook.z));
+    if (roof < Infinity) {
+      // never so low it dunks the lens: the tunnel floor is the river
+      const dry = waterLevelAt(targetPos.x, targetPos.z) + 0.5;
+      targetY = Math.min(targetY, Math.max(roof - CAM_ROOF_GAP, dry));
+    }
+  }
+
   camRig.position.x = damp(camRig.position.x, targetPos.x, l, dt);
-  camRig.position.y = damp(camRig.position.y, targetPos.y, l, dt);
+  camRig.position.y = damp(camRig.position.y, targetY, l, dt);
   camRig.position.z = damp(camRig.position.z, targetPos.z, l, dt);
   // ride over the banks instead of burrowing through them (the dive camera is
   // meant to be underwater, so it opts out)
   // Over water the ground is the lake bed, metres down — hold the rig just
   // below the surface there rather than letting it follow the bowl.
   if (cam.mode !== "fishing") {
-    const ground = Math.max(shoreHeight(camRig.position.x, camRig.position.z), WATER_Y - 0.6) + 1.6;
+    const lvl = waterLevelAt(camRig.position.x, camRig.position.z);
+    const ground = Math.max(shoreHeight(camRig.position.x, camRig.position.z), lvl - 0.6) + 1.6;
     if (camRig.position.y < ground) camRig.position.y = ground;
+    // and the roof again on the rig itself: the ease above is a beat behind the
+    // stone at the mouth, and a beat is long enough to clip through the arch
+    const roof = caveRoofAt(camRig.position.x, camRig.position.z) - CAM_ROOF_GAP;
+    if (camRig.position.y > roof) camRig.position.y = Math.max(roof, lvl + 0.5);
   }
   cam.lookCur.x = damp(cam.lookCur.x, targetLook.x, l + 1.5, dt);
   cam.lookCur.y = damp(cam.lookCur.y, targetLook.y, l + 1.5, dt);
   cam.lookCur.z = damp(cam.lookCur.z, targetLook.z, l + 1.5, dt);
   camRig.lookAt(cam.lookCur);
+
+  // From up on the flyover the biome's own haze would grey out the far half of
+  // the hole, which is the half the shot exists to show. Thin it while we're up
+  // there and pour it back as the camera lands. Eased rather than switched, so
+  // a wipe that cuts the flyover short doesn't snap the lake's colour.
+  if (cam.introFog && (haze !== 1 || cam.introHaze !== 1)) {
+    cam.introHaze = damp(cam.introHaze, haze, 5, dt);
+    if (Math.abs(cam.introHaze - 1) < 0.004) cam.introHaze = 1;
+    world.setFog(cam.introFog.color, cam.introFog.density * cam.introHaze);
+    if (cam.introHaze === 1) cam.introFog = null; // done: the biome has it back
+  }
 
   camera.fov = cam.baseFov + updateFovKick(dt) + drag.power * 4;
   camera.updateProjectionMatrix();
@@ -519,11 +686,14 @@ const drag = {
 };
 
 /** the aim only answers to the pointer while the stone is in your hand: not in
- * flight, not sinking, and not while the fishing minigame owns the drag */
+ * flight, not sinking, not on the line before the lights go out, and not while
+ * the fishing minigame owns the drag. Holding the aim through the count as well
+ * as the throw is deliberate: a swing you were allowed to wind up and then not
+ * allowed to take would read as the game dropping the input. */
 function canAim() {
   const p = G.player;
   if (!p || G.state !== "race" || G.holeOver || p.finished) return false;
-  if (cam.mode === "intro" || G.replay || fishing.active) return false;
+  if (cam.mode === "intro" || G.startHold || G.replay || fishing.active) return false;
   return p.state === "resting" || p.state === "beached" || p.state === "onboat";
 }
 
@@ -534,6 +704,8 @@ function accumulateAim() {
   drag.aimSpeed += (speed - drag.aimSpeed) * AIM_SPEED_EASE;
   const t = clamp01((drag.aimSpeed - AIM_SPEED_LO) / (AIM_SPEED_HI - AIM_SPEED_LO));
   drag.aimX += pointer.dx * (1 + (AIM_GAIN_MAX - 1) * t * t);
+  // enough of a swing to have been meant: the ad stops teaching the aim here
+  if (Math.abs(drag.aimX) > shortEdge * 0.05) G.playerAimed = true;
 }
 
 function updateDragAim() {
@@ -562,7 +734,7 @@ function updateDragAim() {
 
   // the preview runs the stone's own upgrades, so Farsight really does show you
   // more of the flight and Long Skipper's extra hops are on the dotted line
-  const sim = simulateThrow(p.pos, drag.dir, drag.power, G.throwMode, p.rock, water, G.elapsed, p.mods.previewT, COURSE[G.hole].islands, COURSE[G.hole].rocks, drag.elev, p.mods);
+  const sim = simulateThrow(p.pos, drag.dir, drag.power, G.throwMode, p.rock, water, G.elapsed, p.mods.previewT, HOLE.islands, HOLE.solids, drag.elev, p.mods, HOLE.ceilings);
   // The line reads the ending, not the throw. A splash lob that will detonate
   // goes pink; an entry that meets the water too steeply to get a single hop out
   // of it goes blue, so you can see the glug coming before you let go. A skipper
@@ -589,7 +761,7 @@ function updateDragAim() {
     blastRing.material.color.setHex(duffed ? 0x37c8e0 : 0xff5470);
     blastRing.scale.setScalar(duffed ? 0.4 : 1);
     const endP = sim.points[sim.points.length - 1];
-    blastRing.position.set(endP.x, Math.max(WATER_Y + 0.05, endP.y + 0.08), endP.z);
+    blastRing.position.set(endP.x, Math.max(waterLevelAt(endP.x, endP.z) + 0.05, endP.y + 0.08), endP.z);
   } else {
     blastRing.visible = false;
   }
@@ -598,6 +770,7 @@ function updateDragAim() {
 function tryPlayerThrow() {
   const p = G.player;
   if (!p || G.state !== "race" || G.holeOver || cam.mode === "intro") return;
+  if (G.startHold) return; // the lights are still up
   if (p.finished || G.throwCooldown > 0) return;
   if (p.state !== "resting" && p.state !== "beached" && p.state !== "onboat") return;
   if (drag.power < 0.08) return; // tap, not a throw
@@ -606,7 +779,7 @@ function tryPlayerThrow() {
   // invisible aim assist (team scrap: invisible-driving-assist-layer):
   // if the throw would land near the flag line, nudge it a touch truer
   if (G.throwMode === "skip") {
-    const sim = simulateThrow(p.pos, drag.dir, power, "skip", p.rock, water, G.elapsed, 6, COURSE[G.hole].islands, COURSE[G.hole].rocks, drag.elev, p.mods);
+    const sim = simulateThrow(p.pos, drag.dir, power, "skip", p.rock, water, G.elapsed, 6, HOLE.islands, HOLE.solids, drag.elev, p.mods, HOLE.ceilings);
     const end = sim.points[sim.points.length - 1];
     if (end) {
       const flag = currentFlagV3();
@@ -623,7 +796,7 @@ function tryPlayerThrow() {
     fishing.hideBuoy(); // leaving the buoy lie (no-op otherwise)
     cam.mode = "flight";
     G.slowmoUsed = false;
-    audio.throwWhoosh(power);
+    audio.throwWhoosh(power, p.pos);
     fovKick(3 + power * 5);
     shake(0.12 * power);
     haptic(18);
@@ -718,8 +891,11 @@ function enterTitle() {
   metaui.showShellHud(true);
   water.setPath(null); // full open lake behind the title, not a hole's channel
   water.setVortex(); // and no whirlpool cut into it
+  applyBiome(DEFAULT_BIOME, { world, water }); // the lake out of any cup's weather
+  cam.introFog = null; // and the flyover's borrowed haze with it
   world.setHole(null); // radial disc ground/grass to match the open lake
   ui.els.title.classList.remove("hidden");
+  audio.playMusic("menu");
 }
 
 ui.els.playBtn.addEventListener("click", () => {
@@ -1209,7 +1385,7 @@ function routeEvent(msg) {
     s.finished = true;
     s.pos.copy(data.at);
     particles.sinkSplash(data.at, 1.1);
-    audio.sink();
+    audio.sink(data.at);
     return;
   }
   // snap the rock to the event spot so effects line up despite interpolation lag
@@ -1278,15 +1454,17 @@ function enterShelf({ pan = false } = {}) {
   garageBtn.classList.add("hidden");
   water.setPath(null); // open lake behind the bench, no channel
   water.setVortex();
+  applyBiome(DEFAULT_BIOME, { world, water }); // home water, whatever cup you were in
+  cam.introFog = null; // and the flyover's borrowed haze with it
   world.setHole(null);
   bench.place(benchSpot.x, benchSpot.z, benchFront.x, benchFront.z);
   refreshShelfRocks();
+  audio.playMusic("menu"); // the bench is the root, so this is where a race hands back
 
   ui.showPhase("BENCHED ROCKS");
-  ui.els.phaseNext.textContent = "To the lake! →";
+  ui.els.phaseNext.textContent = "Race! →";
   ui.els.phaseNext.classList.add("hidden");
   ui.els.phaseBack.classList.add("hidden"); // the bench is the root — nowhere back to
-  ui.els.rockStats.classList.add("hidden");
   ui.els.shelfRelease.classList.add("hidden");
 
   const pose = shelfCamPose();
@@ -1333,8 +1511,12 @@ function updateShelf(dt) {
     cam.look.copy(pose.look);
   }
 
+  // Only the chosen stone is captioned. Three plates over three floaters read as
+  // a form to fill in; one plate reads as "this is the one", and the stones
+  // themselves are the pick targets either way (onPointerDown raycasts them).
   const items = [];
   let firstFree = -1;
+  let release = null;
   for (let i = 0; i < SHELF_SLOTS; i++) {
     bench.slotPoint(i, _slotPt);
     const rock = G.shelfRocks[i];
@@ -1347,10 +1529,12 @@ function updateShelf(dt) {
     rock.group.position.y += rockLift(rock) + Math.sin(G.elapsed * 1.5 + i * 1.9) * 0.05;
     if (i === G.shelfSel) rock.group.rotation.y += dt * 0.9; // the chosen one shows off
     rock.update(dt);
+    if (i !== G.shelfSel) continue;
     const s = worldToScreen(_tagPt.copy(_slotPt).setY(_slotPt.y + 1.45)); // plate floats over the stone
-    items.push({ slot: i, x: s.x, y: s.y, behind: s.behind, name: rock.label, sub: "tap to race", sel: i === G.shelfSel });
+    items.push({ slot: i, x: s.x, y: s.y, behind: s.behind, name: rock.label, sel: true });
+    release = worldToScreen(_tagPt.copy(_slotPt).setY(_slotPt.y - 1.05)); // and the toss sits under the bench
   }
-  ui.updateShelfTags(items, pickSlot);
+  ui.updateShelfTags(items, pickSlot, release);
 
   // the finger does the talking over the first free floater
   if (firstFree < 0) ui.setTapHand(null);
@@ -1365,7 +1549,7 @@ function pickSlot(i) {
   const rock = G.shelfRocks[i];
   if (!rock) { startCreation(i); return; }
   if (i === G.shelfSel) {
-    // tapping the stone that's already chosen races it, same as "To the lake! →"
+    // tapping the stone that's already chosen races it, same as "Race! →"
     audio.pip(true);
     launchFromShelf();
     return;
@@ -1373,11 +1557,10 @@ function pickSlot(i) {
   audio.pickRock();
   G.shelfSel = i;
   G.releaseArmed = false;
-  ui.els.shelfRelease.textContent = "Toss it back";
+  ui.els.shelfRelease.textContent = "Toss away";
   ui.els.shelfRelease.classList.remove("hidden");
   ui.els.phaseNext.classList.remove("hidden");
   garageBtn.classList.remove("hidden");
-  ui.showStats(rock.flat, rock.heft, rock.grit);
   rock.react("excited", 1.4);
   rock.kickEyes(1.4);
   const s = worldToScreen(rock.group.position);
@@ -1417,7 +1600,6 @@ function startCreation(slot) {
   G.shelfSel = -1;
   audio.pip(true);
   ui.clearShelfTags();
-  ui.els.rockStats.classList.add("hidden");
   ui.els.phaseNext.classList.add("hidden");
   enterFind({ pan: true });
 }
@@ -1444,18 +1626,19 @@ ui.els.shelfRelease.addEventListener("click", () => {
   if (G.state !== "shelf" || G.shelfSel < 0) return;
   if (!G.releaseArmed) {
     G.releaseArmed = true;
-    ui.els.shelfRelease.textContent = "sure? tap to toss it";
+    ui.els.shelfRelease.textContent = "Sure?";
     audio.pip(false);
     return;
   }
   const i = G.shelfSel;
+  // hand the stone to the throw before the bench is rebuilt, or the rebuild
+  // disposes the very thing that's meant to be flying
   const rock = G.shelfRocks[i];
+  G.shelfRocks[i] = null;
   if (rock) {
     particles.paintPuff(rock.group.position, "#bfe8ff");
-    const s = worldToScreen(rock.group.position);
-    if (!s.behind) ui.popup(s.x, s.y - 30, "so long!", { size: 22, color: "#37c8e0" });
+    tossRock(rock);
   }
-  audio.settle();
   clearSlot(i);
   clearLoadout(i); // the build went into the lake with the stone
   G.shelfSel = -1;
@@ -1464,7 +1647,6 @@ ui.els.shelfRelease.addEventListener("click", () => {
   refreshShelfRocks();
   ui.els.shelfRelease.classList.add("hidden");
   ui.els.phaseNext.classList.add("hidden");
-  ui.els.rockStats.classList.add("hidden");
   garageBtn.classList.add("hidden");
 });
 
@@ -1516,6 +1698,7 @@ function clearShelfScene() {
     if (r && r !== G.playerRock) r.dispose();
     G.shelfRocks[i] = null;
   }
+  clearTosses();
   bench.group.visible = false;
   ui.clearShelfTags();
 }
@@ -1584,7 +1767,6 @@ function selectCandidate(idx) {
   G.candidateIdx = idx;
   audio.pickRock();
   const rock = G.candidates[idx];
-  ui.showStats(rock.flat, rock.heft, rock.grit);
   ui.els.phaseNext.classList.remove("hidden");
   // lift the chosen one, drop the rest
   G.candidates.forEach((r, i) => {
@@ -1725,11 +1907,11 @@ function enterShape() {
   ui.showPhase("SHAPE IT");
   ui.els.phaseNext.textContent = "Paint it →";
   ui.els.phaseNext.classList.remove("hidden");
-  ui.showStats(G.playerRock.flat, G.playerRock.heft, G.playerRock.grit);
   G.shapeEyeFade = 1;
   G.shapeEyeHold = 0;
   G.coreBuzzed = false;
   G.bridgeTold = false;
+  G.craftCarved = false; // the ad's coaching hand stays up until the bit bites
 
   G.idleSpinAt = G.elapsed; // idle turntable spins from entry until first touch
 
@@ -1779,6 +1961,68 @@ function updateSinkers(dt) {
 function clearSinkers() {
   for (const s of G.sinkers) s.rock.dispose();
   G.sinkers.length = 0;
+}
+
+/** Where a tossed stone comes down. The shoreline wobbles, so the waterline is
+ *  felt for rather than assumed, the same way the bench spot itself was. */
+function tossTarget() {
+  // Halfway between "straight off the front of the bench" and "at the middle of
+  // the lake". Dead ahead puts the splash behind the backrest, and the camera is
+  // holding still for this, so the throw is angled out past the end of the seat.
+  const dir = _tossDir.set(-benchFront.x, 0, -benchFront.z).normalize()
+    .addScaledVector(_tossAim.set(benchSpot.x, 0, benchSpot.z).normalize(), -1)
+    .normalize();
+  const p = benchSpot.clone();
+  for (let i = 0; i < 60 && shoreHeight(p.x, p.z) > -0.1; i++) p.addScaledVector(dir, 0.5);
+  // and well clear of the shallows: this beach shelves so slowly that a landing
+  // at the water's edge is still inside the bench's silhouette
+  p.addScaledVector(dir, 14);
+  return p.setY(waterLevelAt(p.x, p.z));
+}
+const _tossDir = new THREE.Vector3();
+const _tossAim = new THREE.Vector3();
+
+/** A stone you let go of doesn't blink out — it goes over the shoulder and into
+ *  the lake. The camera holds still for it; the throw reads because the stone
+ *  shrinks away from a fixed frame. */
+function tossRock(rock) {
+  const from = rock.group.position.clone();
+  const to = tossTarget();
+  G.tosses.push({
+    rock, from, to,
+    t: 0,
+    dur: 1.35,
+    lift: 2.4 + from.distanceTo(to) * 0.07,
+    spin: [(Math.random() - 0.5) * 7, 4 + Math.random() * 4, (Math.random() - 0.5) * 7],
+  });
+  audio.throwWhoosh(0.5, from);
+}
+
+function updateTosses(dt) {
+  for (let i = G.tosses.length - 1; i >= 0; i--) {
+    const s = G.tosses[i];
+    s.t += dt;
+    const k = Math.min(1, s.t / s.dur);
+    const g = s.rock.group;
+    g.position.lerpVectors(s.from, s.to, k);
+    g.position.y += Math.sin(k * Math.PI) * s.lift;
+    g.rotation.x += s.spin[0] * dt;
+    g.rotation.y += s.spin[1] * dt;
+    g.rotation.z += s.spin[2] * dt;
+    s.rock.update(dt);
+    if (k < 1) continue;
+    particles.sinkSplash(s.to, 1.7); // far enough out that a modest plume reads as nothing
+    audio.plunge(4, s.to);
+    const p = worldToScreen(s.to);
+    if (!p.behind) ui.popup(p.x, p.y - 40, "so long!", { size: 22, color: "#37c8e0" });
+    s.rock.dispose();
+    G.tosses.splice(i, 1);
+  }
+}
+
+function clearTosses() {
+  for (const s of G.tosses) s.rock.dispose();
+  G.tosses.length = 0;
 }
 
 function updateShape(dt) {
@@ -1840,9 +2084,9 @@ function updateShape(dt) {
         }
       }
       if (moved > 0.00005) {
+        G.craftCarved = true;
         particles.grindChips(at);
         if (Math.random() < 0.35) audio.grind();
-        ui.showStats(rock.flat, rock.heft, rock.grit);
         // gritty, continuous rumble while stone is being worked
         shake(0.006 + Math.random() * 0.004);
         // squirmy carving face — held alive by the constant work, eases back to
@@ -1873,14 +2117,15 @@ function enterPaint() {
   G.paintDrag.spinVel = 0.5;
   G.idleSpinAt = G.elapsed; // idle turntable spins from entry until first touch
   ui.showPhase("PAINT IT");
-  ui.els.phaseNext.textContent = IS_PLAYABLE_CRAFT ? "Done! ✓" : "To the lake! →";
-  ui.els.rockStats.classList.add("hidden");
+  ui.els.phaseNext.textContent = IS_PLAYABLE_CRAFT ? "Done! ✓" : "Race! →";
   G.playerRock.fadeEyes(1); // face back on for the paint booth
+  G.craftPainted = false;
   ui.buildPaintUI({
     patterns: ["dunk", ...ROCK_PATTERNS, "wash"],
     brush: { min: BRUSH_MIN, max: BRUSH_MAX, value: G.brushSize },
     onColor: (c) => {
       G.brushColor = c;
+      G.craftColored = true;
       if (G.elapsed - colorPipAt > 0.09) {
         colorPipAt = G.elapsed;
         audio.pip(true);
@@ -1898,6 +2143,9 @@ function enterPaint() {
       G.brushSize = r;
     },
   });
+  // buildPaintUI loads the brush with its starting colour on the way out, which
+  // trips onColor — the hue strip hasn't been touched by anyone yet
+  G.craftColored = false;
 }
 
 function updatePaint(dt) {
@@ -1907,6 +2155,7 @@ function updatePaint(dt) {
   if (pointer.down && pd.mode === "paint") {
     const hits = raycastFrom({ clientX: pointer.x, clientY: pointer.y }, [rock.mesh]);
     if (hits.length && hits[0].uv) {
+      G.craftPainted = true;
       rock.paintDab(hits[0].uv, G.brushColor, G.brushSize);
       if (Math.random() < 0.2) audio.paintDab();
       if (Math.random() < 0.12) particles.paintPuff(hits[0].point, G.brushColor);
@@ -1938,7 +2187,6 @@ function enterName() {
   const rock = G.playerRock;
   ui.showPhase("NAME IT");
   ui.els.paintUi.classList.add("hidden");
-  ui.els.rockStats.classList.add("hidden");
   ui.els.phaseNext.classList.add("hidden");
   rock.fadeEyes(1);
   rock.react("excited", 2);
@@ -1994,6 +2242,8 @@ function startRace() {
   ui.wipe(() => {
     G.state = "race";
     G.hole = 0;
+    G.playerAimed = false; // the ad's coaching hand stays up until the aim swings
+    audio.playMusic("play", G.tier.musicRate ?? 1);
 
     // player skimmer
     const pName = G.playerRock.label;
@@ -2028,6 +2278,18 @@ function startRace() {
   });
 }
 
+/**
+ * Fold the hole's props into the flat lists the sim reads (see HOLE). Runs
+ * after world.setHole, which is what builds the props in the first place.
+ */
+function bakeHoleGeometry(idx) {
+  const h = COURSE[idx];
+  HOLE.islands = (h.islands ?? []).map((i) => ({ ...i, y: waterLevelAt(i.x, i.z) }));
+  HOLE.solids = (h.rocks ?? []).map((o) => ({ ...o, h: o.h + waterLevelAt(o.x, o.z) }));
+  HOLE.solids.push(...world.props.solids);
+  HOLE.ceilings = world.props.ceilings;
+}
+
 function setupHole(idx) {
   bench.group.visible = false; // the hole's terrain replaces the ground it stood on
   G.hole = idx;
@@ -2041,17 +2303,48 @@ function setupHole(idx) {
   G.raceTape = [];
   G.raceTapeEvents = [];
   const tee = holeTee(idx), flag = holeFlag(idx);
-  // rebuild the ground + grass first so shoreHeight() reflects this channel
-  world.setHole(COURSE[idx].path, COURSE[idx].width);
-  water.setPath(COURSE[idx].path, COURSE[idx].width);
+  // The weather goes on before anything is built, because half of it is baked
+  // in rather than set: the bank's colours are vertex colours laid down by the
+  // terrain rebuild below, and the treeline is planted from the biome's own
+  // species mix (biomes.js).
+  applyBiome(biomeFor(COURSE[idx]), { world, water });
+  // How the hole is got down: one line, or a line and a gamble (route.js). The
+  // bots steer by it and the standings are measured against it, so it is built
+  // before anything reads a position.
+  G.route = buildRoute(COURSE[idx]);
+  // Shape the water first, terraces and all: the ground is built against the
+  // waterline (terrain.js) and the props are stood on top of the ground, so
+  // this order is the dependency order and not a preference.
+  water.setPath(COURSE[idx].path, COURSE[idx].width, COURSE[idx].branches);
+  water.setFalls(holeFalls(COURSE[idx]));
+  // The current goes on after the lips, because it hurries into them, and it
+  // takes the spires and islands as the things it has to flow around.
+  water.setFlow(COURSE[idx].flow, [...(COURSE[idx].rocks ?? []), ...(COURSE[idx].islands ?? [])]);
+  water.setZones(holeZones(COURSE[idx]));
+  world.setHole(COURSE[idx].path, COURSE[idx].width, COURSE[idx]);
+  bakeHoleGeometry(idx);
+  // Ferries steer down the centreline and know nothing about the furniture, so
+  // they sit out any hole that has some: they would motor through a bridge
+  // pier, and a cave would swallow one whole. Terraces are the exception,
+  // because every hole has one — the fleet keeps whichever of its loops stay
+  // on a single shelf and moors the rest (boats.setFalls).
+  const furnished = COURSE[idx];
+  boats.setActive(!(furnished.bridges?.length
+    || furnished.caves?.length || furnished.wheels?.length || furnished.logs?.length
+    || furnished.ice?.length));
+  boats.setFalls(getWaterFalls());
   water.setVortex(flag.x, flag.z); // punch the lake open for the whirlpool
   world.flag.setPosition(flag.x, flag.z);
   // the deck faces down the opening leg, not the tee->flag chord: on a hole that
   // elbows away early those two disagree and you'd launch off the side of it
   const leg = COURSE[idx].path[1];
   world.pontoon.setPose(tee.x, tee.z, Math.atan2(leg.z - tee.z, leg.x - tee.x));
-  world.course.setHole(COURSE[idx].path, COURSE[idx].islands, COURSE[idx].rocks);
-  minimap.bake(COURSE[idx].path, COURSE[idx].islands, COURSE[idx].rocks, COURSE[idx].width);
+  world.course.setHole(COURSE[idx].islands, COURSE[idx].rocks);
+  // the spires were rebuilt just now, in the default stone; give them the
+  // biome's again (biomes.js applyBiome)
+  world.course.setRockColor(BIOMES[biomeFor(COURSE[idx])].rock);
+  minimap.bake(COURSE[idx].path, COURSE[idx].islands, COURSE[idx].rocks, COURSE[idx].width,
+    COURSE[idx], BIOMES[biomeFor(COURSE[idx])].grass.color, COURSE[idx].branches);
   for (const s of G.racers) {
     s.resetHole(tee.x, tee.z, 4);
     s.restY = PONTOON_DECK + 0.85; // opening lie is up on the pontoon deck
@@ -2062,20 +2355,39 @@ function setupHole(idx) {
     b.cooldown = 3.2 + Math.random() * 3.5; // let the intro flyover breathe
     b.fishAt = null;
   }
+  // nobody moves until the light turns green (updateRace). The cooldowns above
+  // are only what keeps the field from firing in one volley on the green — they
+  // are re-rolled short on the go, so the rivals leave the line with you.
+  G.startHold = true;
+  G.lightsT = 0;
+  G.lightsStage = -1;
+  ui.setStartLights(0); // up in the corner, dark, all through the flyover
   cam.mode = "intro";
   G.introT = 0;
   resetAim();
-  // snap the rig to the flyover start so the wipe reveals a framed shot
+  // snap the rig to the flyover start so the wipe reveals a framed shot, with
+  // the haze already thinned for it (nobody sees the switch under the wipe)
   {
-    const len = holeLength(idx);
-    camRig.position.copy(pathPointAtDist(len - CAM_INTRO_LEAD, idx)).setY(7);
-    cam.lookCur.copy(pathPointAtDist(len, idx)).setY(3.5);
+    const pose = introOrbitPose(0, idx);
+    camRig.position.copy(pose.pos);
+    cam.lookCur.copy(pose.look);
+    cam.introFog = world.getFog();
+    cam.introHaze = CAM_INTRO_HAZE;
+    world.setFog(cam.introFog.color, cam.introFog.density * cam.introHaze);
   }
-  const nIsl = COURSE[idx].islands.length;
-  const title = COURSE[idx].name ? `${idx + 1}. ${COURSE[idx].name.toUpperCase()}` : `HOLE ${idx + 1}`;
+  const h = COURSE[idx];
+  const nIsl = h.islands.length;
+  const title = h.name ? `${idx + 1}. ${h.name.toUpperCase()}` : `HOLE ${idx + 1}`;
+  // lead with whatever is unusual about this one, and fall back to the islands
+  const notes = [];
+  if (h.falls?.length) notes.push(h.falls.length === 1 ? "a waterfall" : `${h.falls.length} waterfalls`);
+  if (h.caves?.length) notes.push(h.caves.length === 1 ? "a cave" : `${h.caves.length} caves`);
+  if (h.bridges?.length) notes.push(h.bridges.length === 1 ? "a bridge" : `${h.bridges.length} bridges`);
+  if (h.wheels?.length) notes.push(h.wheels.length === 1 ? "a mill wheel" : `${h.wheels.length} mill wheels`);
+  if (!notes.length) notes.push(`${nIsl} island${nIsl === 1 ? "" : "s"}`);
   ui.banner(
     title,
-    `${Math.round(holeLength(idx))}m of fairway · ${nIsl} island${nIsl === 1 ? "" : "s"} — follow the buoys!`
+    `${Math.round(holeLength(idx))}m of fairway · ${notes.join(", ")} — head for the flag!`
   );
   audio.pip(true);
 }
@@ -2093,7 +2405,9 @@ function procUpgrade(s, id) {
   if (G.elapsed - last < 0.85) return;
   G.procT.set(id, G.elapsed);
   const sc = worldToScreen(s.pos);
-  if (!sc.behind) ui.popup(sc.x, sc.y - 58, `${u.icon} ${u.proc.text}`, { size: 27, color: u.proc.color });
+  // the shout is the upgrade's own words and nothing else: mid-flight, over
+  // water, at speed, a glyph in front of them was never read
+  if (!sc.behind) ui.popup(sc.x, sc.y - 58, u.proc.text, { size: 27, color: u.proc.color });
   audio.pip(true);
   ui.flash(0.15);
   shake(0.1);
@@ -2128,7 +2442,12 @@ function onSkimmerEvent(type, data) {
       case "throw": rk.react("determined", 0.8); break;
       case "skip": rk.react(data.n >= 5 ? "excited" : "happy", 0.9); break;
       case "boing": rk.react("surprised", 0.9); break;
+      case "plunge": rk.react(data.drifted ? "worried" : "surprised", 1.2); break;
+      case "slide": rk.react("excited", 1.0); break;
+      case "weed": rk.react("worried", 0.8); break;
+      case "paddle": rk.react(data.flung ? "excited" : "dizzy", 1.1); break;
       case "duckHit": rk.react("excited", 1.0); break;
+      case "bonk": rk.react("dizzy", 1.2); break;
       case "clonk": rk.react("dizzy", 1.1); break;
       case "blast": rk.react("dizzy", 1.3); break;
       case "beach": case "island": rk.react("worried", 1.0); break;
@@ -2146,7 +2465,8 @@ function onSkimmerEvent(type, data) {
 
   // log splashy moments onto the race tape so the killcam can re-fire them
   if (G.state === "race" && !G.replay && G.raceTape.length) {
-    if (type === "skip" || type === "boing" || type === "blast" || type === "sink" || type === "duckHit") {
+    if (type === "skip" || type === "boing" || type === "blast" || type === "sink"
+        || type === "duckHit" || type === "paddle") {
       G.raceTapeEvents.push({ frame: G.raceTape.length - 1, type, x: data.at.x, y: data.at.y, z: data.at.z, who: s });
     } else if (type === "throw") {
       G.raceTapeEvents.push({ frame: G.raceTape.length - 1, type, who: s });
@@ -2156,7 +2476,7 @@ function onSkimmerEvent(type, data) {
   switch (type) {
     case "skip": {
       particles.skipSplash(data.at, s.vel, Math.min(1, data.speed / 20));
-      audio.skip(data.n, Math.min(1, data.speed / 20));
+      audio.skip(data.n, Math.min(1, data.speed / 20), data.at);
       world.scareDucks(data.at);
       if (mine) {
         const sc = worldToScreen(data.at);
@@ -2179,7 +2499,7 @@ function onSkimmerEvent(type, data) {
     }
     case "settle": {
       particles.idleRipple(s.pos);
-      audio.settle();
+      audio.settle(s.pos);
       if (mine) {
         cam.mode = "aim";
         G.throwCooldown = 0.4;
@@ -2195,7 +2515,7 @@ function onSkimmerEvent(type, data) {
       // a stone coming in perpendicular punches a column; a shallow one slurps
       const steep = data.steep ?? 0.4;
       particles.sinkSplash(data.at, 0.9 + steep * 0.8);
-      audio.sink();
+      audio.sink(data.at);
       world.scareDucks(data.at);
       const sc = worldToScreen(data.at);
       if (!sc.behind) ui.popup(sc.x, sc.y, mine ? "GLUB!" : "glub", { size: mine ? 34 : 18, color: "#37c8e0" });
@@ -2207,7 +2527,7 @@ function onSkimmerEvent(type, data) {
     }
     case "blast": {
       particles.blast(data.at);
-      audio.blast();
+      audio.blast(data.at);
       const caught = (data.victims ?? 0) > 0;
       shake(mine ? (caught ? 0.35 : 0.16) : 0.15);
       if (mine && caught) { hitstop(0.07, 0.85); ui.flash(0.25); }
@@ -2225,7 +2545,6 @@ function onSkimmerEvent(type, data) {
         hitstop(0.055, 0.72);
         fovKick(3);
         haptic([18, 25, 18]);
-        if (!sc.behind) ui.popup(sc.x, sc.y - 30, "FEATHER BOOST!", { size: 32, color: "#fff3bd" });
       } else if (!sc.behind) {
         ui.popup(sc.x, sc.y, "QUACK!", { size: 18, color: "#fff3bd" });
       }
@@ -2242,17 +2561,13 @@ function onSkimmerEvent(type, data) {
           else net.sendTo(victim.netId, msg);
         } else net.send(msg);
       }
-      const sc = worldToScreen(victim.pos);
-      if (!sc.behind) ui.popup(sc.x, sc.y - 10, victim.isPlayer ? "YOU GOT SPLASHED!" : "SPLASHED!", {
-        size: victim.isPlayer ? 34 : 24, color: "#ff5470",
-      });
-      audio.splashed();
+      audio.splashed(victim.pos);
       if (victim.isPlayer) { shake(0.4); ui.flash(0.3); haptic([30, 50, 30]); }
       if (mine) ui.banner("DIRECT HIT!", `${victim.name} is going for a swim`, 1.4);
       break;
     }
     case "boing": {
-      audio.boing(data.n);
+      audio.boing(data.n, data.at);
       particles.skipSplash(data.at, s.vel, 0.5);
       world.scareDucks(data.at);
       const sc = worldToScreen(data.at);
@@ -2267,8 +2582,48 @@ function onSkimmerEvent(type, data) {
       }
       break;
     }
+    case "bonk": {
+      // the underside of a bridge deck or a cave roof: the lob's punishment,
+      // the way a spire is the flat skip's
+      audio.headKnock(data.kind, data.at);
+      particles.grindChips(data.at);
+      const sc = worldToScreen(data.at);
+      if (mine) {
+        shake(0.26);
+        hitstop(0.05, 0.75);
+        haptic([22, 26]);
+        if (!sc.behind) ui.popup(sc.x, sc.y - 10, "BONK!", { size: 30, color: "#d9c39a" });
+      } else if (!sc.behind) {
+        ui.popup(sc.x, sc.y, "bonk", { size: 16, color: "#d9c39a" });
+      }
+      break;
+    }
+    case "paddle": {
+      // a mill blade caught the stone: flung down the fairway on the upswing,
+      // swatted under on the way down
+      audio.paddleWhack(data.flung, data.at);
+      particles.skipSplash(data.at, s.vel, data.flung ? 0.9 : 0.5);
+      world.scareDucks(data.at);
+      if (mine) {
+        shake(data.flung ? 0.3 : 0.2);
+        hitstop(0.05, 0.72);
+        fovKick(data.flung ? 5 : 2);
+        haptic([20, 20, 20]);
+      }
+      break;
+    }
+    case "plunge": {
+      // over the edge: the camera lets go for a moment and the stone goes with it
+      audio.plunge(data.drop, data.at);
+      particles.smoke(data.at);
+      if (mine) {
+        fovKick(4);
+        haptic(18);
+      }
+      break;
+    }
     case "boatThunk": {
-      audio.thunk();
+      audio.thunk(data.at);
       particles.skipSplash(data.at, s.vel, 0.4);
       if (mine) {
         shake(0.18);
@@ -2278,7 +2633,7 @@ function onSkimmerEvent(type, data) {
       break;
     }
     case "deckLand": {
-      audio.deckLand();
+      audio.deckLand(data.at);
       if (mine) {
         ui.banner("FERRY RIDE!", `the ${FERRY_NAMES[data.boatType] || "boat"} carries your stone`, 2.2);
         cam.mode = "aim";
@@ -2292,7 +2647,7 @@ function onSkimmerEvent(type, data) {
       break;
     }
     case "clonk": {
-      audio.thunk();
+      audio.thunk(data.at);
       particles.grindChips(data.at);
       particles.skipSplash(data.at, s.vel, 0.3);
       const sc = worldToScreen(data.at);
@@ -2307,36 +2662,56 @@ function onSkimmerEvent(type, data) {
       break;
     }
     case "island": {
-      audio.deckLand();
+      audio.deckLand(data.at);
       particles.grindChips(data.at);
       const sc = worldToScreen(data.at);
+      const deck = !!data.deck; // came down on top of a bridge instead
       if (mine) {
-        if (!sc.behind) ui.popup(sc.x, sc.y - 20, "ISLAND STOP!", { size: 28, color: "#6fe07a" });
-        ui.banner("SAFE ON SAND", "no fishing on dry land", 1.6);
+        if (!deck) ui.banner("SAFE ON SAND", "no fishing on dry land", 1.6);
         cam.mode = "aim";
         G.throwCooldown = 0.4;
         resetAim();
         shake(0.08);
       } else if (!sc.behind) {
-        ui.popup(sc.x, sc.y, `${s.name} island-hopped`, { size: 15, color: "#6fe07a" });
+        ui.popup(sc.x, sc.y, `${s.name} ${deck ? "landed on the bridge" : "island-hopped"}`, { size: 15, color: "#6fe07a" });
       }
       break;
     }
     case "beach": {
-      audio.thunk();
+      audio.thunk(data.at);
       if (mine) {
-        const sc = worldToScreen(data.at);
-        if (!sc.behind) ui.popup(sc.x, sc.y, "BEACHED", { size: 26, color: "#eed9a4" });
         cam.mode = "aim";
         G.throwCooldown = 0.4;
         resetAim();
       }
       break;
     }
+    case "slide": {
+      // down on the ice: no splash to make, just a long scrape and a stone
+      // that is still going somewhere
+      audio.iceSlide(data.speed, data.at);
+      particles.grindChips(data.at);
+      if (mine) {
+        shake(0.1);
+        haptic(10);
+      }
+      break;
+    }
+    case "thaw": {
+      // ran off the end of the sheet still travelling — back to open water
+      audio.settle(data.at);
+      particles.skipSplash(data.at, s.vel, 0.5);
+      break;
+    }
+    case "weed": {
+      audio.weedDrag(data.thick, data.at);
+      particles.idleRipple(data.at);
+      break;
+    }
     case "flag": {
       // the whirlpool takes it: foam where it got caught, glub as it goes under
       particles.sinkSplash(data.at, 1.1);
-      audio.sink();
+      audio.sink(data.at);
       if (NET.mode === "guest") {
         // netSendEvent shipped our tape to the host — the host places us
         if (s.isPlayer) s.finished = true;
@@ -2346,7 +2721,7 @@ function onSkimmerEvent(type, data) {
       break;
     }
     case "throw": {
-      if (!mine && Math.random() < 0.5) audio.throwWhoosh(data.power * 0.5);
+      if (!mine && Math.random() < 0.5) audio.throwWhoosh(data.power * 0.5, s.pos);
       break;
     }
   }
@@ -2440,7 +2815,10 @@ function endHole(reason) {
     const flag = currentFlagV3();
     let best = null, bestD = Infinity;
     for (const s of G.racers) {
-      const d = s.distToFlag(flag);
+      // Closest by water, not as the crow flies: on a hole that forks, the two
+      // lines are nowhere near each other and the stone with less left to swim
+      // is the one in front, whichever side of the headland it is on.
+      const d = G.route ? G.route.remainingAt(s.pos.x, s.pos.z) : s.distToFlag(flag);
       if (d < bestD) { bestD = d; best = s; }
     }
     if (best) { G.holeWinner = best; G.holeFinishers.push(best); }
@@ -2535,15 +2913,15 @@ function updateReplay(dt) {
       let kick = 0;
       if (e.type === "skip" || e.type === "boing") {
         particles.skipSplash(at, new THREE.Vector3(0, 0, 0.01), 0.8);
-        audio.skip(3, 0.7);
+        audio.skip(3, 0.7, at);
         kick = 2;
       } else if (e.type === "blast") {
         particles.blast(at);
-        audio.blast();
+        audio.blast(at);
         kick = 2.2;
       } else if (e.type === "sink") {
         particles.sinkSplash(at, 1);
-        audio.sink();
+        audio.sink(at);
         kick = 1.5;
       } else if (e.type === "duckHit") {
         particles.featherBurst(at, new THREE.Vector3(0, 0, 0.01));
@@ -2632,6 +3010,12 @@ function standingsRows() {
 function nextHoleOrResults() {
   if (NET.mode === "guest") return; // host drives hole transitions
   if (G.hole + 1 < COURSE.length) {
+    // the ad stops at every hole to make its offer, rather than rolling straight
+    // on into the next one — see showPlayableCard
+    if (IS_PLAYABLE_SKIP) {
+      showPlayableCard(G.holeFinishers[0] === G.player, true);
+      return;
+    }
     if (NET.mode === "host") net.broadcast({ t: "nextHole", idx: G.hole + 1 });
     gotoHole(G.hole + 1);
   } else {
@@ -2655,15 +3039,13 @@ function endMatch(rowsIn = null) {
   const playerWon = rows[0]?.me;
   track("race_end", { mode: NET.mode, won: !!playerWon, place: rows.findIndex((r) => r.me) + 1 });
   if (IS_PLAYABLE_SKIP) {
-    // Hand off to the ad's end-card CTA (defined in the playable entry html).
-    if (playerWon) { audio.win(); } else { audio.lose(); }
-    cam.mode = "orbit";
-    try { window.__playableEnd__ && window.__playableEnd__(!!playerWon); } catch (e) { /* never break the ad */ }
+    showPlayableCard(!!playerWon, false);
     return;
   }
   ui.showResults(rows, playerWon);
   if (NET.mode === "solo") awardCareer(rows, playerWon);
   nextCupBtn.classList.toggle("hidden", NET.mode !== "solo");
+  audio.playMusic(playerWon ? "victory" : "menu");
   if (playerWon) {
     audio.win();
     // fireworks everywhere
@@ -2676,6 +3058,34 @@ function endMatch(rowsIn = null) {
     audio.lose();
   }
   cam.mode = "orbit";
+}
+
+/**
+ * The ad's card, put up at the end of every hole rather than only at the end of
+ * the course.
+ *
+ * A playable's one job is the store button, and a five-hole course is four holes
+ * more than most people who scroll past it will ever finish — so the offer can't
+ * sit behind all of them. Each hole closes on the same card: the install CTA,
+ * and, while there's course left, a way back into the game next to it. Whichever
+ * one gets tapped, the ad did its job.
+ *
+ * `won` means the hole for a mid-course card and the whole course for the last
+ * one; the copy is the entry html's business (__playableEnd__), not ours.
+ */
+function showPlayableCard(won, hasNext) {
+  if (fishing.active) fishing.cancel();
+  clearGaze();
+  rivalLines.hideAll();
+  ui.els.raceHud.classList.add("hidden");
+  hidePreview();
+  cam.mode = "orbit";
+  G.hintsOff = true; // the card is the only thing left to tap
+  hints.hide();
+  if (won) audio.win(); else audio.lose();
+  try {
+    window.__playableEnd__?.(won, { level: G.hole + 1, levels: COURSE.length, hasNext });
+  } catch (e) { /* an ad never breaks on its own end card */ }
 }
 
 // ------------------------------------------------------------------ career payout
@@ -2726,6 +3136,7 @@ function teardownRace({ keepPlayerRock = false } = {}) {
   if (fishing.active) fishing.cancel();
   rivalLines.hideAll();
   hidePreview();
+  ui.setStartLights(null); // a count left mid-air if the race is dropped
   ui.els.raceHud.classList.add("hidden");
   ui.hideResults();
   metaui.hidePayout();
@@ -2791,7 +3202,7 @@ function updateGaze(dt) {
     const rk = s.rock;
     if (!rk) continue;
     // mid-throw it watches where it's going, not the neighbours
-    if (s.state === "flying" && !G.replay) {
+    if ((s.state === "flying" || s.state === "sliding") && !G.replay) {
       _gazeAt.copy(s.mesh.position).addScaledVector(s.vel, 0.4);
       rk.lookAt(_gazeAt);
       s.gazeT = 0;
@@ -2817,21 +3228,74 @@ function clearGaze() {
   }
 }
 
+/**
+ * Green. The hole is on, and the green stays up behind you for the rest of it.
+ *
+ * The rivals' opening cooldown was long enough to sit out the intro flyover and
+ * the count after it; leaving it would have them standing on the bridge for
+ * another five seconds after the signal they were waiting for. Re-rolled to
+ * barely anything, they go when you go — a start everyone reacts to at once,
+ * rather than a field that hadn't noticed the hole had begun.
+ */
+function releaseStartHold() {
+  G.startHold = false;
+  G.lightsStage = LIGHTS_GO;
+  ui.setStartLights(LIGHTS_GO);
+  for (const b of G.bots) b.cooldown = 0.12 + Math.random() * 0.7;
+  audio.startGo();
+  ui.banner("GO!", "", 0.9);
+  ui.flash(0.28);
+}
+
+/**
+ * The little inflatable donut is the player's lie whenever the stone is floating,
+ * not just after a catch: it comes out under the stone wherever it stops on open
+ * water and rides along with it, so a lie the river is walking downstream takes
+ * its float with it. Anywhere there is nothing to float in — beached, on a deck,
+ * up on the tee pontoon, out on an ice lid — it goes away again.
+ */
+function syncFloat(dt) {
+  if (G.replay?.active) return; // the killcam tape owns the stones
+  if (fishing.active) return; // mid-dive the buoy is what the line hangs from
+  const p = G.player;
+  if (!p || !p.afloat) { fishing.hideBuoy(); return; }
+  fishing.parkBuoy(p.pos.x, p.pos.z);
+  // the ring inflates under the stone rather than snapping it up into the middle
+  p.restY = damp(p.restY, BUOY_REST, 9, dt);
+}
+
 function updateRace(dt) {
   const flag = currentFlagV3();
   const ctx = {
     dt, elapsed: G.elapsed, water, boats,
     others: G.racers, flagPos: flag, captureR: CAPTURE_R,
-    islands: COURSE[G.hole].islands, path: COURSE[G.hole].path, rocks: COURSE[G.hole].rocks,
+    islands: HOLE.islands, path: COURSE[G.hole].path, route: G.route, rocks: HOLE.solids,
+    ceilings: HOLE.ceilings, props: world.props,
     hitDuck: (pos, vel) => world.hitDuck(pos, vel),
     onBotRecover: (s) => {
       particles.sinkSplash(s.pos, 0.7);
     },
   };
 
+  // still on the line: run the signal's count, but not until the flyover has
+  // handed the camera over, or the light would turn green behind the player's back
+  if (G.startHold && cam.mode !== "intro") {
+    G.lightsT += dt;
+    const stage = Math.min(LIGHTS_GO, Math.floor(G.lightsT / LIGHTS_STEP));
+    if (stage !== G.lightsStage) {
+      if (stage === LIGHTS_GO) {
+        releaseStartHold(); // it puts the green up itself
+      } else {
+        G.lightsStage = stage;
+        ui.setStartLights(stage);
+        if (stage > 0) audio.startLight(stage - 1);
+      }
+    }
+  }
+
   // timer (host/solo authoritative; guests track + resync from clock messages).
   // Once a stone is in, the readout comes up: that's the final stretch running.
-  if (!G.holeOver) {
+  if (!G.holeOver && !G.startHold) {
     G.holeTime -= dt;
     if (G.holeFinishers.length) ui.setHoleTimer(Math.max(0, G.holeTime));
     if (G.holeTime <= 0) holeTimeout();
@@ -2872,7 +3336,7 @@ function updateRace(dt) {
     else s.step(ctx);
 
     // flight trails — a long enough chain still overrides everything with fire
-    if (s.state === "flying") {
+    if (s.state === "flying" || s.state === "sliding") {
       if (s.skips >= s.mods.fireAt) particles.fireTrail(s.pos);
       else if (s.isPlayer && G.loadout && G.loadout.trail !== "none") {
         emitTrail(particles, G.loadout.trail, s.pos, 0xbfe8ff);
@@ -2902,6 +3366,8 @@ function updateRace(dt) {
     }
   }
 
+  syncFloat(dt);
+
   // player sink -> dive underwater and fish it back. How long the stone is under
   // first is the entry angle's business (physics.js): a steep plunge is a short
   // wait, a shallow glug wallows.
@@ -2909,7 +3375,7 @@ function updateRace(dt) {
   if (p.state === "sinking" && p.sinkT > p.sinkDelay && !fishing.active) {
     p.state = "fishing";
     const spot = p.pos.clone();
-    spot.y = 0;
+    spot.y = waterLevelAt(spot.x, spot.z);
     cam.mode = "fishing";
     fishing.start(spot, p.rock, (clean, hits) => {
       // every fish bump drifts you back toward the tee — Tugboat softens it
@@ -2923,24 +3389,27 @@ function updateRace(dt) {
       fishing.parkBuoy(p.pos.x, p.pos.z);
       p.restY = BUOY_REST;
       particles.sinkSplash(p.pos, 0.8);
-      audio.settle();
+      audio.settle(p.pos);
       const sc = worldToScreen(p.pos);
-      if (!sc.behind) ui.popup(sc.x, sc.y - 30, clean ? "CLEAN CATCH!" : "got it back...", { size: 28, color: "#6fe07a" });
+      if (!sc.behind && !clean) ui.popup(sc.x, sc.y - 30, "got it back...", { size: 28, color: "#6fe07a" });
       cam.mode = "aim";
       G.throwCooldown = 0.4;
       resetAim();
       p.rock.kickEyes(1.5);
-    }, COURSE[G.hole]?.rocks ?? [], p.mods); // spires the dive camera has to see around
+    }, HOLE.solids, p.mods); // spires and piers the dive camera has to see around
   }
 
-  // bots think (each stops once its own stone is in; all stop when the hole is called)
-  if (!G.holeOver) {
+  // bots think (each stops once its own stone is in; all stop when the hole is
+  // called, and none of them start until the player has taken a throw)
+  if (!G.holeOver && !G.startHold) {
     for (const b of G.bots) b.update(ctx);
   }
 
   // camera follows the action
   if (cam.mode !== "intro" && !G.replay) {
-    if (p.state === "flying") cam.mode = "flight";
+    // a stone running down an ice sheet is still mid-throw, and the camera has
+    // no business swinging back to the aim view while it's going
+    if (p.state === "flying" || p.state === "sliding") cam.mode = "flight";
     else if (p.state === "fishing" && fishing.active) cam.mode = "fishing";
     else if (p.state === "sinking") {
       if (cam.mode !== "closeup") cam.mode = "flight"; // hover where it went down
@@ -2977,6 +3446,202 @@ function minimapTick(dt) {
   mmAccum = 0;
 }
 
+// ------------------------------------------------------------------ playable coaching
+// Ads only. The full game opens on a title screen, spells its verbs out on
+// buttons, and has a player who went looking for it; a playable gets a stranger
+// mid-scroll and a couple of seconds to teach a control scheme. So every phase
+// keeps a hand on screen doing the gesture it wants, and drops it the moment a
+// finger lands. See hints.js for the sprites and the animation.
+let hintIdle = 0; // seconds since the player last touched anything
+
+function updateHints(dt) {
+  if (G.hintsOff) { hints.hide(); return; }
+  // a finger on the glass says the hint has done its job, for now
+  if (pointer.down) { hintIdle = 0; hints.hide(); return; }
+  hintIdle += dt;
+  if (IS_PLAYABLE_SKIP) {
+    if (fishing.steering) fishHint();
+    else { fishAnchorX = null; throwHint(); }
+  } else if (G.state === "find") findHint();
+  else if (G.state === "shape") shapeHint();
+  else if (G.state === "paint") paintHint();
+  else hints.hide();
+}
+
+const shortEdge = () => Math.min(window.innerWidth, window.innerHeight);
+
+/** point at the "Shape it →" / "Paint it →" / "Done! ✓" button. It says what it
+ *  does, so the hand goes up bare — a caption here would only repeat it. */
+function nextButtonHint(id) {
+  const btn = ui.els.phaseNext;
+  if (btn.classList.contains("hidden")) { hints.hide(); return; }
+  const at = hints.centerOf(btn);
+  hints.show({ id, gesture: "tap", cursor: "point", label: "", x: at.x, y: at.y, size: 56 });
+}
+
+/**
+ * Where a hint lands on the stone being worked, and how wide a stroke across it
+ * is worth miming. Not the middle: that's where the face lives, and a hand
+ * parked over the eyes reads as something covering the toy rather than as
+ * something showing you what to do with it. Down and left of centre is a bare
+ * flank with the face still watching.
+ *
+ * Everything is scaled off the stone's own size on screen rather than the
+ * screen's, so the hand sits in the same place on it whether it's a pebble a
+ * long way off or filling the frame at arm's length.
+ */
+const _hintDir = new THREE.Vector3();
+const _hintSide = new THREE.Vector3();
+const _hintOff = new THREE.Vector3();
+function stoneHintPoint() {
+  const g = G.playerRock.group.position;
+  const at = worldToScreen(g);
+  if (at.behind) return null;
+  // a stone's worth of world, measured out sideways and projected: the gap it
+  // opens up on screen is the stone's on-screen radius
+  camera.getWorldDirection(_hintDir);
+  _hintSide.set(_hintDir.z, 0, -_hintDir.x).normalize();
+  const side = worldToScreen(_hintOff.copy(g).addScaledVector(_hintSide, 0.55));
+  const rad = Math.max(24, Math.abs(side.x - at.x));
+  // a skipping stone is a flat ellipse, so the room below the face runs out
+  // sooner than the room beside it
+  return { x: at.x - rad * 0.62, y: at.y + rad * 0.44, rad };
+}
+
+/**
+ * The throw, taught in two goes.
+ *
+ * One drag carries both halves of a throw — how far back you pull is the power,
+ * how far sideways you slide is the aim — and a hand miming both at once is just
+ * a hand waving. So the first stone of the ad only ever gets asked for the pull,
+ * which is the half you can't throw without; the sideways swing is offered on
+ * the next one, by which point there's a spire or a dogleg on screen making the
+ * case for it. Both lessons retire the moment the player does the thing.
+ */
+function throwHint() {
+  const p = G.player;
+  // the stone has to actually be in your hand: not mid-flight, not down in the
+  // lake, not still under the opening flyover
+  if (!canAim() || G.throwCooldown > 0) { hintIdle = 0; hints.hide(); return; }
+  const first = p.totalThrows === 0;
+  const teachAim = !first && !G.playerAimed;
+  // the opening throw gets the hand straight away — nothing has happened yet and
+  // a still lake reads as a screenshot. Later ones wait for the player to go
+  // quiet, so it nags rather than nannies.
+  if (hintIdle < (first ? 0.4 : teachAim ? 1.5 : 3)) { hints.hide(); return; }
+  // off the centreline: dead centre puts the pull straight down the flagpole,
+  // and the two lines read as one piece of furniture
+  const x = window.innerWidth * 0.42, y = window.innerHeight * 0.42;
+  if (teachAim) {
+    // scrubbed rather than dragged: the aim swings both ways off wherever the
+    // stone is already pointing, so there's no one direction to travel in.
+    // A sideways gesture lives at one height, and the pull's height is the far
+    // bank — the busiest band in the shot — so this one sits below it on the water
+    hints.show({
+      id: "aim", gesture: "rub", cursor: "grab", label: "left & right to aim",
+      x, y: window.innerHeight * 0.5, dx: shortEdge() * 0.28, dy: 0,
+    });
+    return;
+  }
+  hints.show({
+    id: "throw", gesture: "drag", cursor: "grab",
+    label: first ? "pull back, then let go" : "your throw!",
+    x, y, dx: 0, dy: shortEdge() * 0.2,
+  });
+}
+
+// where the pointer sat when this dive started steering: the minigame reads an
+// absolute finger position rather than a drag, so "hasn't found the control yet"
+// can only be told from "is using it" by whether the finger has gone anywhere
+let fishAnchorX = null;
+
+/**
+ * The dive. Nothing here is dragged and nothing is tapped — the hook chases
+ * wherever across the glass your finger is, which is a control scheme with no
+ * affordance at all until someone happens to move. So the hand scrubs sideways
+ * low in the frame, under the fish and clear of the hook it's talking about.
+ */
+function fishHint() {
+  if (fishAnchorX == null) fishAnchorX = pointer.x;
+  // they've moved it: they have it. The anchor stays put for the rest of the
+  // dive, so putting the finger back where it started doesn't restart the lesson
+  if (hintIdle < 0.5 || Math.abs(pointer.x - fishAnchorX) > shortEdge() * 0.05) {
+    hints.hide();
+    return;
+  }
+  // down on the sand, under the stone you're fishing for: the camera frames the
+  // whole water column, so anywhere higher is either the hook, a fish, or the
+  // stone itself, and a hand parked on the target hides the thing it's aiming at
+  hints.show({
+    id: "fish", gesture: "rub", cursor: "point", label: "slide to steer",
+    x: window.innerWidth * 0.5, y: window.innerHeight * 0.87,
+    dx: shortEdge() * 0.32, dy: 0,
+  });
+}
+
+function findHint() {
+  if (G.candidateIdx >= 0) {
+    // one's floating already: the only thing left to say is the button
+    if (hintIdle < 1.2) { hints.hide(); return; }
+    nextButtonHint("find-next");
+    return;
+  }
+  // whichever stone sits nearest the middle of the shot — never the one half off
+  // the edge of a phone, and the shortest trip for a thumb
+  let best = null, bestD = Infinity;
+  const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+  for (const r of G.candidates) {
+    const s = worldToScreen(r.group.position);
+    if (s.behind) continue;
+    const d = Math.hypot(s.x - cx, s.y - cy);
+    if (d < bestD) { bestD = d; best = s; }
+  }
+  if (!best) { hints.hide(); return; }
+  hints.show({ id: "find", gesture: "tap", cursor: "point", label: "tap a rock", x: best.x, y: best.y });
+}
+
+function shapeHint() {
+  if (G.craftCarved) {
+    if (hintIdle < 4) { hints.hide(); return; }
+    nextButtonHint("shape-next");
+    return;
+  }
+  const at = hintIdle < 0.5 ? null : stoneHintPoint();
+  if (!at) { hints.hide(); return; }
+  // scrubbed across the stone rather than tapped at it: the bit only bites while
+  // the finger is moving, which is the one thing about the drill worth saying
+  hints.show({
+    id: "carve", gesture: "rub", cursor: "carve", label: "drag to carve",
+    x: at.x, y: at.y, dx: at.rad * 1.1, dy: 0,
+  });
+}
+
+function paintHint() {
+  if (!G.craftPainted) {
+    const at = hintIdle < 0.5 ? null : stoneHintPoint();
+    if (!at) { hints.hide(); return; }
+    hints.show({
+      id: "paint", gesture: "rub", cursor: "brush", label: "drag to paint",
+      x: at.x, y: at.y, dx: at.rad * 1.1, dy: 0,
+    });
+    return;
+  }
+  // painting is understood; the hue strip is the part nobody finds on their own.
+  // The strip is its own track, so the hint doesn't draw one — a second bar
+  // alongside the first only reads as a second slider.
+  if (!G.craftColored) {
+    if (hintIdle < 1) { hints.hide(); return; }
+    const bar = ui.els.colorBar.getBoundingClientRect();
+    hints.show({
+      id: "hue", gesture: "rub", cursor: "point", label: "slide for a colour", track: false,
+      x: bar.left + bar.width / 2, y: bar.top + bar.height / 2, dx: 0, dy: bar.height * 0.55,
+    });
+    return;
+  }
+  if (hintIdle < 4) { hints.hide(); return; }
+  nextButtonHint("paint-next");
+}
+
 // ------------------------------------------------------------------ main loop
 let last = performance.now();
 function frame(now) {
@@ -2998,13 +3663,14 @@ function frame(now) {
   }
 
   water.update(dt, G.elapsed);
-  world.update(dt, G.elapsed, water);
+  world.update(dt, G.elapsed, water, particles);
   boats.update(dt, G.elapsed, water, particles);
   particles.update(dt);
   updateSinkers(dt);
+  updateTosses(dt);
   cel.update(dt);
   audio.update(rawDt);
-  fishing.update(rawDt, G.elapsed, pointer.x / window.innerWidth);
+  fishing.update(rawDt, G.elapsed, pointer.x / window.innerWidth, pointer.y / window.innerHeight);
   if (G.replay?.active) updateReplay(rawDt);
 
   switch (G.state) {
@@ -3032,12 +3698,14 @@ function frame(now) {
       break;
     case "race": updateRace(dt); break;
   }
+  if (IS_PLAYABLE) updateHints(rawDt); // coaching is wall-clock: hitstop must not stretch it
 
   camUpdate(rawDt); // camera on real time so slow-mo still feels smooth
   applyShake(shakeRig, rawDt, G.elapsed);
   camera.getWorldPosition(_wsPos);
   camera.getWorldQuaternion(_wsQuat);
   setEyeTarget(_wsPos, _wsQuat); // pupils track the camera; face billboards to it
+  audio.setListener(_wsPos, _wsQuat); // and the ear rides along with them
 
   // submerged? dark-blue grade + wobble filter on the canvas
   const under = camRig.position.y < -0.15;
@@ -3078,6 +3746,15 @@ function startPlayable() {
   });
   scene.add(rock.group);
   G.playerRock = rock;
+  // the "next level" button on the ad's between-holes card (showPlayableCard).
+  // The card hides itself; everything the race put away for it comes back here.
+  window.__playableNext__ = () => {
+    if (G.hole + 1 >= COURSE.length) return;
+    G.hintsOff = false;
+    hintIdle = 0;
+    ui.els.raceHud.classList.remove("hidden");
+    gotoHole(G.hole + 1);
+  };
   startRace();
 }
 
@@ -3097,6 +3774,8 @@ function startCraftPlayable() {
 function finishCraftPlayable() {
   audio.win();
   ui.hidePhase();
+  G.hintsOff = true; // the end card is the only thing left to tap
+  hints.hide();
   G.playerRock?.react?.("excited", 2);
   G.playerRock?.kickEyes?.(1.4);
   try { window.__playableEnd__ && window.__playableEnd__(true); } catch (e) { /* never break the ad */ }
@@ -3106,7 +3785,20 @@ function finishCraftPlayable() {
 window.__skimmers = {
   G, selectCandidate, worldToScreen, cam, camRig, camera, THREE, HOLES, boats, fishing,
   startPlayable, startCraftPlayable, setupHole, bench, enterShelf, pickSlot, confirmName, endMatch,
+  world, water, applyBiome, BIOME_IDS, audio,
   // career hooks, so a test can hand itself a pile of shells or wipe the save
   meta: { loadMeta, shells, addShells, resetMeta, loadoutFor },
   get course() { return COURSE; },
 };
+
+// The skin's art is git-ignored and pulled in separately, so a fresh clone runs
+// fine and just looks wrong — untextured panels, no explanation. Say it out loud
+// instead of leaving someone to wonder what they broke.
+chromeMissing().then((missing) => {
+  if (missing) {
+    console.warn(
+      "Casual Blue chrome is missing — the menus will render untextured.\n" +
+      "  npm run cb:sync   (needs the private kit; see NOTICE-casual-blue.md)"
+    );
+  }
+});
