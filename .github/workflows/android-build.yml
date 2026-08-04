@@ -23,6 +23,14 @@ jobs:
       # Secrets can't be referenced in step `if:` directly; presence flags here.
       HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
       HAS_PLAY_SA: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+      # The interface is skinned with licensed art that may not live in this
+      # public repo, so public/cb/ is git-ignored and a checkout doesn't have it.
+      # Nothing breaks without it — vite copies public/ verbatim, the sprite
+      # classes only set custom properties, and the game comes out with every
+      # panel and button an untextured box. On a phone there isn't even a console
+      # to warn into, so a build made without the kit must not reach Play.
+      HAS_CHROME: ${{ secrets.CB_KIT_TOKEN != '' }}
+      CB_KIT_TOKEN: ${{ secrets.CB_KIT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +48,27 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Fetch the Casual Blue chrome
+        if: env.HAS_CHROME == 'true'
+        run: |
+          git clone --depth 1 \
+            "https://x-access-token:${CB_KIT_TOKEN}@github.com/ai-asylum/casual-blue-ui.git" \
+            ../casual-blue-ui
+          npm run cb:sync
+
+      # Belt and braces: cb:sync can succeed against a kit that has moved on and
+      # still leave a sprite the manifest claims unaccounted for.
+      - name: Check the chrome is all there
+        if: env.HAS_CHROME == 'true'
+        run: node scripts/check-cb.mjs
+
+      - name: Warn that this build has no chrome
+        if: env.HAS_CHROME != 'true'
+        run: |
+          echo "::warning::No CB_KIT_TOKEN, so this build's UI is untextured boxes." \
+               "The artifact is marked unshippable and the Play upload is skipped." \
+               "Add the secret before the first Play upload — see NOTICE-casual-blue.md."
 
       - name: Build web bundle
         env:
@@ -67,7 +96,9 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: skippidyskip-android-release
+          # The human checklist says to grab this and upload it by hand, so an
+          # unskinned one has to say so in the only place they'll look.
+          name: ${{ env.HAS_CHROME == 'true' && 'skippidyskip-android-release' || 'skippidyskip-android-release-UNSKINNED-do-not-upload' }}
           path: |
             android/app/build/outputs/apk/release/app-release.apk
             android/app/build/outputs/bundle/release/app-release.aab
@@ -75,7 +106,7 @@ jobs:
 
       - name: Upload AAB to Play (internal track)
         id: play_upload
-        if: github.event_name == 'push' && env.HAS_PLAY_SA == 'true'
+        if: github.event_name == 'push' && env.HAS_PLAY_SA == 'true' && env.HAS_CHROME == 'true'
         # Google requires the first upload of a new app to be made by hand in the
         # Console, so until that happens the package does not exist and this step
         # can only fail ("Package not found"). Set the repo variable
