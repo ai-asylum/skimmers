@@ -23,6 +23,11 @@ npm run cb:sync
 `public/cb/` and regenerates `src/cb/manifest.js` and `src/cb/cb.css`. Set
 `CB_KIT` if your clone is somewhere else.
 
+CI reaches the kit the same way, through a `CB_KIT_TOKEN` secret that can read
+the private repo. Without it the playable workflow skips the rebuild — the ad
+build won't produce a chrome-less artifact — and smoke-tests the committed one
+instead.
+
 Those two generated files **are** committed, on purpose. They hold ids, pixel
 sizes, slice insets and urls — numbers we wrote about the art, not the art —
 so a clone without kit access still installs, builds and diffs normally. It

@@ -7,6 +7,10 @@ name: Playable
 # that workflow lives in a PRIVATE repo this repo can't resolve via `uses:`. On
 # main pushes a stale committed artifact is rebuilt-and-committed back; the smoke
 # test is the gate on every event.
+#
+# The rebuild half needs the licensed interface chrome, which lives in another
+# private repo, so it only runs where CB_KIT_TOKEN is set. The smoke test runs
+# against the committed artifact and needs nothing.
 
 on:
   push:
@@ -36,6 +40,10 @@ jobs:
       contents: write # for the rebuild commit on push
     env:
       PLAYABLE_GLOB: ads/playable-skip/*.html ads/playable-craft/*.html
+      # A token that can read ai-asylum/casual-blue-ui. Absent on forks, and
+      # absent until someone adds it, which is why every step that needs the
+      # chrome is guarded on it rather than assuming it.
+      CB_KIT_TOKEN: ${{ secrets.CB_KIT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,11 +57,31 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The interface chrome is licensed art kept in a private repo and out of
+      # this public one (see NOTICE-casual-blue.md), and the ad build refuses to
+      # ship an artifact without it rather than quietly producing a naked one.
+      # So the rebuild can only run where the kit can be reached.
+      - name: Fetch the Casual Blue chrome
+        if: env.CB_KIT_TOKEN != ''
+        run: |
+          git clone --depth 1 \
+            "https://x-access-token:${CB_KIT_TOKEN}@github.com/ai-asylum/casual-blue-ui.git" \
+            ../casual-blue-ui
+          npm run cb:sync
+
+      - name: Say why the rebuild is being skipped
+        if: env.CB_KIT_TOKEN == ''
+        run: |
+          echo "::notice::No CB_KIT_TOKEN, so the licensed chrome can't be fetched and the" \
+               "ad can't be rebuilt here. The committed artifact is still smoke-tested below."
+
       - name: Rebuild the playable from source
+        if: env.CB_KIT_TOKEN != ''
         run: npm run build:playable
 
       - name: Check the committed artifact is fresh
         id: diff
+        if: env.CB_KIT_TOKEN != ''
         run: |
           if git diff --quiet -- $PLAYABLE_GLOB; then
             echo "stale=false" >> "$GITHUB_OUTPUT"
