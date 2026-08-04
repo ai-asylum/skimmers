@@ -7,6 +7,8 @@ const $ = (id) => document.getElementById(id);
 
 export const els = {
   raceHud: $("race-hud"),
+  startSignal: $("start-signal"),
+  startLamps: [...document.querySelectorAll("#start-signal .lamp")],
   finishers: $("finishers"),
   holeTimer: $("hole-timer"),
   holeTimerVal: $("hole-timer-val"),
@@ -19,10 +21,6 @@ export const els = {
   phaseTitle: $("phase-title"),
   phaseNext: $("phase-next"),
   phaseBack: $("phase-back"),
-  rockStats: $("rock-stats"),
-  statFlat: $("stat-flat"),
-  statHeft: $("stat-heft"),
-  statGrit: $("stat-grit"),
   paintUi: $("paint-ui"),
   patterns: $("patterns"),
   colorBar: $("color-bar"),
@@ -94,15 +92,22 @@ export function flash(strength = 0.5) {
 // ---------------------------------------------------------------- finishers board
 // The running order of stones that made the hole, medals down from gold. Rows
 // are appended as they land so only the new name animates in.
-const MEDALS = ["🥇", "🥈", "🥉"];
+// The top three wear gold, silver and bronze as a tint on the placing itself,
+// the same way a finished cup does on the picker (metaui.js PLACE_TINT). A
+// medal glyph would have been a different shape on every platform and is worse
+// at the one job here, which is telling you at a glance which place is yours.
+const MEDAL_TINT = ["#ffd24a", "#e3ebf2", "#e0a06b"];
+const ORDINAL = (n) => `${n}${["th", "st", "nd", "rd"][n > 3 ? 0 : n]}`; // a field never reaches 21st
 
 export function addFinisher(place, name, color, me = false) {
   els.finishers.classList.remove("hidden");
   const row = document.createElement("div");
   row.className = "fin-row" + (me ? " me" : "");
   const medal = document.createElement("span");
-  medal.className = "medal";
-  medal.textContent = MEDALS[place - 1] ?? `${place}.`;
+  medal.className = "medal" + (place <= 3 ? " top" : "");
+  medal.textContent = ORDINAL(place);
+  // your own row is already gold, and gold-on-gold is no colour at all
+  if (!me && MEDAL_TINT[place - 1]) medal.style.color = MEDAL_TINT[place - 1];
   const dot = document.createElement("span");
   dot.className = "dot";
   dot.style.background = color;
@@ -129,6 +134,26 @@ export function setHoleTimer(seconds) {
   els.holeTimerVal.textContent = `${(s / 60) | 0}:${String(s % 60).padStart(2, "0")}`;
 }
 
+// ---------------------------------------------------------------- start signal
+// The count that opens a hole, in the top-left corner. main.js owns the clock
+// (LIGHTS_STEP) and calls in a stage at a time; all that happens here is a
+// class, with the pop, the breathing and the bloom left to CSS keyframes.
+let signalDown = null;
+
+/** 0 all dark, 1 red, 2 orange, 3 green; null takes it off the screen. The
+ *  green shows itself out a beat after the go — by then the hole is running
+ *  and a lit corner is just something else to look past. */
+export function setStartLights(stage) {
+  clearTimeout(signalDown);
+  els.startSignal.classList.toggle("up", stage != null);
+  for (let i = 0; i < els.startLamps.length; i++) {
+    els.startLamps[i].classList.toggle("on", stage === i + 1);
+  }
+  if (stage === els.startLamps.length) {
+    signalDown = setTimeout(() => els.startSignal.classList.remove("up"), 950);
+  }
+}
+
 // ---------------------------------------------------------------- phases
 export function showPhase(title) {
   els.phaseUi.classList.remove("hidden");
@@ -136,35 +161,31 @@ export function showPhase(title) {
 }
 export function hidePhase() {
   els.phaseUi.classList.add("hidden");
-  els.rockStats.classList.add("hidden");
   els.paintUi.classList.add("hidden");
   els.phaseNext.classList.add("hidden");
   els.phaseBack.classList.add("hidden");
   hideNameUI();
   clearShelfTags();
 }
-export function showStats(flat, heft, grit) {
-  els.rockStats.classList.remove("hidden");
-  els.statFlat.style.width = `${Math.round(flat * 100)}%`;
-  els.statHeft.style.width = `${Math.round(heft * 100)}%`;
-  els.statGrit.style.width = `${Math.round(grit * 100)}%`;
-}
 
 // ---------------------------------------------------------------- rock shelf
-// One plate per stone on the bench, parked over its floater in screen space.
-// The plate is clickable as well as the slot itself, so a fat thumb aiming at
-// the name picks the rock it was aiming at. Empty floaters get no plate — the
-// pointing finger (setTapHand) does that job.
+// The chosen stone wears a name plate over its floater, in screen space. The
+// plate is clickable as well as the slot itself, so a fat thumb aiming at the
+// name picks the rock it was aiming at. Unpicked and empty floaters get no
+// plate — the pointing finger (setTapHand) does that job.
 let shelfPick = null;
 
-/** @param items {{slot:number,x:number,y:number,behind:boolean,name:string,sub:string,sel:boolean}[]} */
-export function updateShelfTags(items, onPick) {
+/**
+ * @param items {{slot:number,x:number,y:number,behind:boolean,name:string,sel:boolean}[]}
+ * @param release screen point under the chosen stone for the release button, or null
+ */
+export function updateShelfTags(items, onPick, release = null) {
   shelfPick = onPick ?? shelfPick;
   while (els.shelfTags.children.length < items.length) {
     const tag = document.createElement("div");
     tag.className = "rock-tag";
     tag.onclick = () => shelfPick?.(+tag.dataset.slot);
-    tag.innerHTML = `<span class="nm"></span><span class="sub"></span>`;
+    tag.innerHTML = `<span class="nm"></span>`;
     els.shelfTags.appendChild(tag);
   }
   for (let i = 0; i < els.shelfTags.children.length; i++) {
@@ -177,8 +198,14 @@ export function updateShelfTags(items, onPick) {
     tag.style.left = `${Math.round(it.x)}px`;
     tag.style.top = `${Math.round(it.y)}px`;
     tag.querySelector(".nm").textContent = it.name;
-    tag.querySelector(".sub").textContent = it.sub;
   }
+  // the release button belongs to the chosen stone, so it sits under it
+  const anchored = release && !release.behind;
+  if (anchored) {
+    els.shelfRelease.style.left = `${Math.round(release.x)}px`;
+    els.shelfRelease.style.top = `${Math.round(release.y)}px`;
+  }
+  els.shelfRelease.classList.toggle("no-anchor", !anchored);
 }
 
 /** park the pointing finger on a screen point, or pass nothing to put it away */

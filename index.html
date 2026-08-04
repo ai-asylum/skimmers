@@ -93,26 +93,63 @@
     font-size: clamp(14px, 2.4vw, 22px); color: var(--paper); font-weight: 700;
     text-shadow: 0 2px 0 rgba(0,0,0,0.5); letter-spacing: 0.12em; text-transform: uppercase;
   }
+  /* ---------- buttons ----------
+     Casual Blue plates (src/cb/). The sprite is a nine-slice, so the plate
+     stretches to whatever the label needs and the moulded corners stay at their
+     drawn size. Colour comes from a sprite class in the markup — `cb-btn-yellow`
+     for the big ones, `cb-btn85-*` for the small — and this rule only does
+     layout, type and the press.
+
+     The old hover leaned on `scale(1.04) rotate(-1deg)`. Both are off the table
+     now: transforming a nine-slice re-rasterises it and hairline seams appear
+     along the joins, so the lift is translate-only (NOTICE-casual-blue.md). */
   .btn {
-    pointer-events: auto; cursor: pointer; border: none;
-    font-family: inherit; font-weight: 900; letter-spacing: 0.06em;
-    font-size: clamp(18px, 3vw, 28px); color: var(--ink);
-    background: var(--gold);
-    padding: 16px 44px; border-radius: 60px;
-    box-shadow: 0 6px 0 #c99a1d, 0 12px 24px rgba(0,0,0,0.35);
-    transition: transform 0.08s ease, box-shadow 0.08s ease;
+    pointer-events: auto; cursor: pointer;
+    box-sizing: border-box; border-style: solid; border-color: transparent;
+    border-image-repeat: stretch;
+    /* the sprite is the whole button, so nothing may sit behind it — a <button>
+       defaults to a pale `buttonface` fill, which showed as a white card poking
+       out around the plate's rounded corners */
+    background: none;
+    font-family: var(--cb-display); font-weight: 400; letter-spacing: 0.03em;
+    font-size: clamp(18px, 3vw, 28px); color: #fff;
+    text-shadow: 0 2px 0 rgba(0,0,0,0.28);
+    padding: 10px 34px 13px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
     text-transform: uppercase;
+    filter: drop-shadow(0 4px 7px rgba(0,0,0,0.3));
+    transition: transform 0.08s ease;
+    /* default plate, so a button with no colour class is still dressed */
+    border-image-source: url("/cb/button/button01_109_yellow.png");
+    border-image-slice: 18 20 22 20 fill;
+    border-width: 9px 10px 11px 10px;
   }
-  .btn:hover { transform: translateY(-2px) scale(1.04) rotate(-1deg); }
-  .btn:active { transform: translateY(4px); box-shadow: 0 2px 0 #c99a1d, 0 4px 10px rgba(0,0,0,0.35); }
-  .btn.small { font-size: 16px; padding: 10px 24px; box-shadow: 0 4px 0 #c99a1d, 0 8px 14px rgba(0,0,0,0.3); }
-  .btn.blue { background: var(--accent2); box-shadow: 0 6px 0 #1d8fa3, 0 12px 24px rgba(0,0,0,0.35); }
-  .btn.blue:active { box-shadow: 0 2px 0 #1d8fa3, 0 4px 10px rgba(0,0,0,0.35); }
+  .btn:hover { transform: translateY(-2px); }
+  .btn:active { transform: translateY(3px); }
+  /* pale plates carry dark text — white lettering vanishes into them */
+  .btn, .btn.yellow, .btn.white { color: var(--cb-yellow-text); text-shadow: none; }
+  .btn.blue, .btn.green, .btn.danger { color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,0.28); }
+  .btn.small {
+    font-size: 16px; padding: 7px 20px 9px;
+    border-image-source: url("/cb/button/button01_85_yellow.png");
+    border-image-slice: 16 18 20 18 fill;
+    border-width: 8px 9px 10px 9px;
+  }
+  .btn.blue { border-image-source: url("/cb/button/button01_109_blue.png"); }
+  .btn.small.blue { border-image-source: url("/cb/button/button01_85_blue.png"); }
+  .btn.green { border-image-source: url("/cb/button/button01_109_green.png"); }
+  .btn.small.green { border-image-source: url("/cb/button/button01_85_green.png"); }
+  .btn.white { border-image-source: url("/cb/button/button01_109_white_bg.png"); }
+  .btn.small.white { border-image-source: url("/cb/button/button01_85_white_bg.png"); }
+  .btn:disabled, .btn.locked {
+    cursor: default; transform: none;
+    filter: saturate(0.12) brightness(0.92);
+  }
 
   /* ---------- phase header (find/shape/paint) ---------- */
   #phase-ui { z-index: 30; display: flex; flex-direction: column; align-items: center; }
   #phase-title {
-    margin-top: 4vh;
+    margin-top: 11vh;
     font-size: clamp(34px, 7.4vw, 72px); font-weight: 900; color: var(--paper);
     -webkit-text-stroke: 4px var(--ink);
     paint-order: stroke fill;
@@ -135,16 +172,6 @@
     display: flex; flex-direction: column; align-items: center; gap: 10px;
   }
 
-  /* stat bars for the rock */
-  #rock-stats { display: flex; gap: 18px; background: rgba(253,246,227,0.92); padding: 12px 20px; border-radius: 18px;
-    box-shadow: 0 4px 0 rgba(22,50,74,0.6), 0 10px 20px rgba(0,0,0,0.3); }
-  .stat { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 90px; }
-  .stat label { font-size: 12px; font-weight: 900; letter-spacing: 0.1em; }
-  .stat .bar { width: 100%; height: 12px; background: #d8ccb1; border-radius: 6px; overflow: hidden; border: 2px solid var(--ink); }
-  .stat .bar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.15s ease; }
-  .stat.flat .bar i { background: var(--accent2); }
-  .stat.grit .bar i { background: var(--gold); }
-
   #phase-buttons { display: flex; gap: 10px; align-items: center; justify-content: center; }
 
   /* ---------- rock shelf: name plates floating over the bench slots ---------- */
@@ -160,7 +187,6 @@
     box-shadow: 0 4px 0 rgba(22,50,74,0.5), 0 8px 16px rgba(0,0,0,0.3);
     transition: transform 0.1s ease, background 0.15s ease;
   }
-  .rock-tag .sub { font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.65; }
   .rock-tag:hover { transform: translate(-50%, -50%) translateY(-3px) scale(1.05); }
   .rock-tag.sel { background: var(--gold); transform: translate(-50%, -50%) translateY(-4px) scale(1.07); }
 
@@ -194,10 +220,19 @@
     width: min(54vw, 250px); background: #fff; user-select: text; -webkit-user-select: text;
   }
   #name-input:focus { outline: 3px solid var(--gold); }
-  .btn.danger { background: var(--danger); box-shadow: 0 4px 0 #b93a52, 0 8px 14px rgba(0,0,0,0.3); }
-  .btn.danger:active { box-shadow: 0 2px 0 #b93a52, 0 4px 10px rgba(0,0,0,0.35); }
-  /* letting a rock go is a side door, not the main one — say it quietly */
-  #shelf-release { font-size: 13px; padding: 7px 18px; opacity: 0.92; }
+  .btn.danger { border-image-source: url("/cb/button/button01_109_red.png"); }
+  .btn.small.danger { border-image-source: url("/cb/button/button01_85_red.png"); }
+  /* Letting a rock go belongs to that rock, not to the phase, so the button
+     sits just under the chosen stone's floater (ui.js parks it there). */
+  #shelf-release {
+    position: fixed; z-index: 26;
+    font-size: 13px; padding: 5px 16px 7px; opacity: 0.95;
+    transform: translate(-50%, 0);
+  }
+  #shelf-release:hover { transform: translate(-50%, 0) translateY(-2px); }
+  #shelf-release:active { transform: translate(-50%, 0) translateY(3px); }
+  /* nothing to ride on: the chosen stone swung behind the camera */
+  #shelf-release.no-anchor { display: none; }
 
   /* ---------- paint booth, Snapchat style ----------
      No palette panel: the stone keeps the whole screen and the tools hug the
@@ -305,7 +340,8 @@
     animation: finIn 0.4s cubic-bezier(0.18, 1.4, 0.4, 1) both;
   }
   .fin-row.me { background: var(--gold); color: var(--ink); text-shadow: none; }
-  .fin-row .medal { font-size: 17px; line-height: 1; min-width: 20px; text-align: center; }
+  .fin-row .medal { font-size: 12px; font-weight: 900; line-height: 1; min-width: 24px; text-align: center; opacity: 0.75; }
+  .fin-row .medal.top { font-size: 14px; opacity: 1; }
   .fin-row .dot { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid rgba(0,0,0,0.45); }
   @keyframes finIn { 0% { transform: translateX(40px) scale(0.85); opacity: 0; } 100% { opacity: 1; } }
 
@@ -323,6 +359,71 @@
   #hole-timer.urgent { background: rgba(255,84,112,0.85); }
   #hole-timer.urgent #hole-timer-val { animation: tick 1s steps(1, end) infinite; }
   @keyframes tick { 0%, 60% { opacity: 1; } 61%, 100% { opacity: 0.45; } }
+
+  /* start signal — the traffic light that opens a hole (main.js runs the count,
+     ui.setStartLights works it). It hung over the tee in the world until the
+     camera proved it could put it anywhere on screen it liked; up here it is
+     the same size in the same corner every time, which is the whole job. The
+     corner is free because the shell HUD goes down for a race. */
+  #start-signal {
+    --d: clamp(26px, 6.4vw, 38px);
+    position: absolute;
+    top: max(14px, env(safe-area-inset-top));
+    left: max(14px, env(safe-area-inset-left));
+    display: flex; flex-direction: column; gap: calc(var(--d) * 0.26);
+    padding: calc(var(--d) * 0.3); border-radius: calc(var(--d) * 0.75);
+    background: linear-gradient(180deg, rgba(16,52,74,0.8), rgba(8,26,42,0.84));
+    border: 2px solid rgba(253,246,227,0.5);
+    box-shadow: 0 5px 14px rgba(0,0,0,0.4), inset 0 2px 0 rgba(255,255,255,0.16);
+    opacity: 0; transform: translateY(-10px) scale(0.88);
+    transition: opacity 0.25s ease, transform 0.3s cubic-bezier(0.18, 1.4, 0.4, 1);
+  }
+  #start-signal.up { opacity: 1; transform: none; }
+
+  /* One lamp: a domed radial gradient for the glass, the sky caught across the
+     top of it (::before) and the hard pinpoint of the sun under that (::after).
+     A broad soft highlight plus one small sharp one is what stops a flat circle
+     reading as a flat circle. Lit, it takes its own colour and grows two
+     box-shadow halos — fake bloom, for nothing, and it can go brighter than the
+     real thing because nothing else on screen has to survive the exposure. */
+  #start-signal .lamp {
+    position: relative; width: var(--d); height: var(--d); border-radius: 50%;
+    background: radial-gradient(circle at 38% 30%, var(--off), #09121b 82%);
+    box-shadow: inset 0 0 0 2px rgba(0,0,0,0.5), inset 0 -3px 5px rgba(159,216,255,0.16);
+    transition: background 0.1s linear;
+  }
+  #start-signal .lamp::before {
+    content: ""; position: absolute; left: 15%; top: 7%; width: 70%; height: 33%;
+    border-radius: 50% 50% 70% 70% / 50% 50% 100% 100%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.5), rgba(255,255,255,0.04));
+  }
+  #start-signal .lamp::after {
+    content: ""; position: absolute; left: 21%; top: 19%; width: 25%; height: 15%;
+    border-radius: 50%; background: rgba(255,255,255,0.7);
+  }
+  #start-signal .red { --off: #46232a; --on: #ff3a2c; --glow: 255,58,44; }
+  #start-signal .amber { --off: #453423; --on: #ffab1a; --glow: 255,171,26; }
+  #start-signal .green { --off: #22412c; --on: #3ceb5b; --glow: 60,235,91; }
+  #start-signal .lamp.on {
+    background: radial-gradient(circle at 38% 30%, #fff, var(--on) 52%, var(--on));
+    animation:
+      lampPop 0.34s cubic-bezier(0.2, 1.5, 0.4, 1),
+      lampBreathe 1.4s ease-in-out 0.34s infinite alternate;
+  }
+  @keyframes lampPop {
+    0% { transform: scale(0.84);
+         box-shadow: inset 0 0 0 2px rgba(0,0,0,0.35), 0 0 4px 1px rgba(var(--glow),0.9); }
+    45% { transform: scale(1.17);
+          box-shadow: inset 0 0 0 2px rgba(0,0,0,0.35),
+                      0 0 16px 6px rgba(var(--glow),1), 0 0 42px 17px rgba(var(--glow),0.6); }
+    100% { transform: scale(1); }
+  }
+  @keyframes lampBreathe {
+    from { box-shadow: inset 0 0 0 2px rgba(0,0,0,0.35),
+                       0 0 9px 2px rgba(var(--glow),0.8), 0 0 22px 7px rgba(var(--glow),0.4); }
+    to { box-shadow: inset 0 0 0 2px rgba(0,0,0,0.35),
+                     0 0 14px 4px rgba(var(--glow),0.95), 0 0 36px 13px rgba(var(--glow),0.6); }
+  }
 
   /* combo popups + floating text */
   #popups { z-index: 25; overflow: hidden; }
@@ -410,6 +511,10 @@
 
   /* ---------- title menu (solo / multiplayer) ---------- */
   .menu-view { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  /* Solo and Multiplayer are one choice, so they get one shape — stretched to a
+     shared width rather than each shrinking to its own label, which left the
+     shorter word on a visibly smaller plate. */
+  #menu-main { align-items: stretch; width: min(300px, 78vw); }
   .menu-label {
     font-size: clamp(13px, 2vw, 17px); font-weight: 900; letter-spacing: 0.14em;
     color: var(--paper); text-shadow: 0 2px 4px rgba(0,0,0,0.6); text-transform: uppercase;
@@ -485,134 +590,274 @@
      same chunky ink outline and 4px drop the rock stats and name plates use, so
      the meta screens read as part of the same lakeside furniture rather than a
      store bolted onto the game. */
+  /* The pack's resource pill: a white capsule with the count sunk into a dark
+     track, and the currency mark riding on the left cap. Ours is a shell rather
+     than the pack's coin — the game's money is shells and the pack has no shell
+     — so the icon stays our own SVG (src/icons.js), tinted to the pack's gold. */
   #shell-hud {
+    --plate-tint: var(--cb-tint-navy);
     position: fixed; top: 12px; left: 14px; z-index: 46; pointer-events: none;
     display: flex; align-items: center; gap: 8px;
-    background: rgba(253,246,227,0.94); color: var(--ink);
-    padding: 7px 16px 7px 12px; border-radius: 999px;
-    border: 3px solid var(--ink); font-weight: 900; font-size: 20px;
-    box-shadow: 0 4px 0 rgba(22,50,74,0.55), 0 8px 16px rgba(0,0,0,0.3);
+    padding: 4px 18px 5px 10px; min-height: 38px;
+    font-family: var(--cb-display); font-weight: 400; font-size: 20px;
+    color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,0.45);
+    filter: drop-shadow(0 4px 8px rgba(0,0,0,0.35));
   }
-  #shell-hud .ico { font-size: 20px; }
+  #shell-hud .ico { display: flex; color: var(--cb-yellow); }
+  #shell-hud .ico .ico-svg {
+    width: 24px; height: 24px;
+    filter: drop-shadow(0 1px 0 rgba(0,0,0,0.45));
+  }
+  /* the count sits on the pill's dark inset, so it reads white */
+  #shell-count { padding-right: 2px; }
+  /* the old punch scaled and rotated; on a nine-slice that re-rasterises the
+     capsule and shows seams, so it's a hop and a flash now */
   #shell-hud.punch { animation: shellPunch 0.45s cubic-bezier(0.2,1.6,0.4,1); }
   @keyframes shellPunch {
-    0% { transform: scale(1); }
-    35% { transform: scale(1.22) rotate(-3deg); background: var(--gold); }
-    100% { transform: scale(1); }
+    0% { transform: translateY(0); }
+    35% { transform: translateY(-6px); filter: drop-shadow(0 4px 8px rgba(0,0,0,0.35)) brightness(1.35); }
+    100% { transform: translateY(0); }
   }
 
   .meta-scrim {
     z-index: 44; pointer-events: auto;
-    background: rgba(6,26,40,0.62); backdrop-filter: blur(5px);
-    display: flex; align-items: center; justify-content: center; padding: 2vh 2vw;
+    background: var(--cb-dimmer); backdrop-filter: blur(5px);
+    display: flex; align-items: center; justify-content: center;
+    /* the purse and the muter float above this layer, so the panel starts below
+       the strip they live in — on a short phone a centred panel used to put its
+       title under the shell count */
+    padding: 58px 2vw 2vh;
   }
+  /* The pack's popup plate, carried on a backdrop layer (.cb-plate) so it can be
+     tinted without the filter reaching the text. Big in-game modals in this pack
+     are dark — see the pause popup in the kit's reference shots — and that dark
+     field is what makes the bright item frames on it read. So the plate goes
+     deep navy and everything on it turns white.
+
+     The sprite and its slice numbers come from the `cb-popup` class in the
+     markup; nothing here restates them. */
   .meta-panel {
-    width: min(940px, 96vw); max-height: 96vh; overflow: hidden;
+    --plate-tint: var(--cb-tint-panel);
+    width: min(940px, 96vw); max-height: 100%; overflow: hidden;
     display: flex; flex-direction: column; gap: 10px;
-    background: var(--paper); border: 4px solid var(--ink); border-radius: 26px;
-    padding: 16px 18px; box-shadow: 0 8px 0 rgba(22,50,74,0.55), 0 22px 44px rgba(0,0,0,0.45);
+    padding: 22px 24px; color: #fff;
+    filter: drop-shadow(0 10px 22px rgba(0,0,0,0.5));
   }
-  .meta-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .meta-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  /* the outline comes from .cb-title in the markup; the old -1.5deg tilt is
+     gone, it was fighting the frame's straight moulding */
   .meta-title {
-    font-size: clamp(24px, 4.2vw, 38px); font-weight: 900; letter-spacing: 0.03em;
-    text-transform: uppercase; transform: rotate(-1.5deg);
+    font-size: clamp(24px, 4.2vw, 38px);
+    text-transform: uppercase;
   }
-  .meta-sub { font-weight: 800; font-size: 15px; opacity: 0.62; }
+  .meta-sub { font-weight: 800; font-size: 15px; color: #9fb2e8; }
   .meta-head .btn { margin-left: auto; }
   .meta-label {
     font-size: 12px; font-weight: 900; letter-spacing: 0.16em;
-    text-transform: uppercase; opacity: 0.55; margin-top: 2px;
+    text-transform: uppercase; color: #8fa4de; margin-top: 2px;
   }
 
   /* the two upgrade sockets */
   #garage-sockets { display: flex; gap: 10px; }
+  /* An empty socket stays an outline — the pack has no "nothing here yet" frame
+     and any drawn plate reads as something you already own. A filled one gets
+     the item-slot sprite tinted yellow, the pack's colour for a live slot, with
+     its focus glow layered over the top. */
   .socket {
     flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px;
-    padding: 9px 10px; border-radius: 16px; cursor: default;
-    border: 3px dashed rgba(22,50,74,0.35); background: rgba(22,50,74,0.05);
+    padding: 11px 10px; border-radius: 14px; cursor: default;
+    border: 3px dashed rgba(159,178,232,0.45); background: rgba(10,16,50,0.35);
+    color: #9fb2e8;
   }
   .socket.full {
-    cursor: pointer; border-style: solid; border-color: var(--ink);
-    background: var(--gold); box-shadow: 0 4px 0 rgba(22,50,74,0.45);
+    --plate-tint: var(--cb-tint-gold);
+    --ring-out: 4px;
+    cursor: pointer; color: var(--cb-yellow-text);
+    border: none; border-radius: 0; background: none;
+    padding: 11px 10px;
+    transition: transform 0.08s ease;
   }
   .socket.full:hover { transform: translateY(-2px); }
   .socket .ico { font-size: 24px; line-height: 1.1; }
-  .socket .nm { font-weight: 900; font-size: 15px; }
-  .socket .rm { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.55; }
-
-  /* tabs */
-  .meta-tabs { display: flex; gap: 7px; flex-wrap: wrap; }
-  .meta-tab {
-    font-family: inherit; font-weight: 900; font-size: 14px; cursor: pointer;
-    display: flex; align-items: center; gap: 6px;
-    padding: 8px 16px; border-radius: 999px; color: var(--ink);
-    border: 3px solid var(--ink); background: #fff;
-    box-shadow: 0 3px 0 rgba(22,50,74,0.4);
+  /* a fitted socket shows the upgrade's own art (metaui renderSockets) */
+  .socket .ico.art {
+    width: 46px; height: 30px; border-radius: 8px;
+    background-image: var(--art); background-size: cover; background-position: center;
+    box-shadow: inset 0 0 0 2px rgba(22,50,74,0.25);
   }
-  .meta-tab.sel { background: var(--accent2); }
+  .socket .nm { font-family: var(--cb-display); font-weight: 400; font-size: 17px; }
+  .socket .rm { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.7; }
+
+  /* tabs — the small button plate, white when resting and blue when selected */
+  .meta-tabs { display: flex; gap: 7px; flex-wrap: wrap; }
+  /* the plate comes from a cb-btn85-* class that metaui swaps on selection */
+  .meta-tab {
+    font-family: var(--cb-display); font-weight: 400; font-size: 15px; cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 16px 8px; color: var(--cb-ink);
+    background: none; border: none; /* the plate is the sprite; see .btn */
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+    transition: transform 0.08s ease;
+  }
+  .meta-tab.sel { color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,0.28); }
   .meta-tab:hover { transform: translateY(-2px); }
+  .meta-tab .ico { display: flex; }
+  .meta-tab .ico-svg { width: 15px; height: 15px; }
+  /* the tab glyphs are ours (src/icons.js), so they take the label's colour */
+  .meta-tab.sel .ico-svg { filter: drop-shadow(0 1px 0 rgba(0,0,0,0.3)); }
 
   /* the card grid */
   /* min-height:0 or the flex child refuses to shrink and the panel clips the
      last rows of upgrades with no way to scroll to them */
   .meta-grid { overflow-y: auto; min-height: 0; padding: 2px 4px 6px; display: flex; flex-direction: column; gap: 6px; }
   .meta-group {
-    font-size: 12px; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase;
-    opacity: 0.5; margin-top: 6px;
+    font-family: var(--cb-display); font-weight: 400;
+    font-size: 14px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--cb-yellow); margin-top: 8px;
+    text-shadow: 0 2px 0 rgba(0,0,0,0.35);
   }
   .meta-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: 8px; }
+  /* The item-frame plate, tinted by state: unaffordable cards sit back in the
+     navy, ones you can buy come forward in sky, owned in blue and the fitted
+     one in yellow. That colour-as-status is how the pack's own grids read at a
+     glance, and it costs one sprite rather than four.
+
+     The tint lives on a backdrop layer (::before) so it never reaches the text;
+     the ring on top (::after) is a second sprite the pack draws separately. */
   .card {
-    font-family: inherit; text-align: left; cursor: pointer; color: var(--ink);
+    --plate-tint: var(--cb-tint-sky);
+    font-family: inherit; text-align: left; cursor: pointer; color: #fff;
     display: flex; flex-direction: column; gap: 2px;
-    padding: 9px 11px; border-radius: 16px;
-    border: 3px solid var(--ink); background: #fff;
-    box-shadow: 0 4px 0 rgba(22,50,74,0.4);
-    transition: transform 0.08s ease, background 0.12s ease;
+    padding: 9px 11px;
+    border: none; background: none;
+    filter: drop-shadow(0 3px 5px rgba(0,0,0,0.3));
+    transition: transform 0.08s ease;
   }
   .card:hover { transform: translateY(-3px); }
   .card-ico { font-size: 22px; line-height: 1.15; }
+  /* upgrade art sits in a box the same size as the cosmetics' 3D display, so the
+     two tabs line up; the art is all lake water, so it tiles into the card */
+  .card-art {
+    height: 64px; margin: 1px 0 4px; border-radius: 8px;
+    background-image: var(--art); background-size: cover; background-position: center;
+    box-shadow: inset 0 0 0 2px rgba(10,16,50,0.3);
+  }
   /* the dressing-up box shows the goods: a little lit display box per card with
      the real hat, ring or trail turning in it, painted by one shared WebGL pass
      (cosmeticpreview.js) laid over the grid. The emoji inside is the fallback,
      dropped as soon as the 3D pass claims the slot. */
   .card-shot {
     display: flex; align-items: center; justify-content: center;
-    height: 64px; margin: 1px 0 4px; border-radius: 10px; overflow: hidden;
+    height: 64px; margin: 1px 0 4px; border-radius: 8px; overflow: hidden;
     font-size: 26px; line-height: 1;
-    background: linear-gradient(#eaf6fb, #cde5f1);
-    box-shadow: inset 0 0 0 2px rgba(22,50,74,0.1);
+    background: linear-gradient(#1a2a63, #101a44);
+    box-shadow: inset 0 0 0 2px rgba(10,16,50,0.3);
   }
-  .card-shot.live { font-size: 0; }
-  .card.equipped .card-shot { background: linear-gradient(#fff6d8, #ffe6a2); }
+  /* the 3D pass takes the box over and the placeholder glyph steps aside */
+  .card-shot.live .shot-ghost { display: none; }
+  .shot-ghost { display: flex; color: rgba(159,178,232,0.45); }
+  .shot-ghost .ico-svg { width: 30px; height: 30px; }
+  .card.equipped .card-shot { background: linear-gradient(#6b4f00, #3d2b00); }
   #preview-gl { position: fixed; z-index: 45; pointer-events: none; display: none; }
-  .card-nm { font-weight: 900; font-size: 15px; line-height: 1.1; }
-  .card-blurb { font-size: 11.5px; font-weight: 600; line-height: 1.25; opacity: 0.72; min-height: 29px; }
+  .card-nm { font-family: var(--cb-display); font-weight: 400; font-size: 16px; line-height: 1.15; }
+  .card-blurb { font-size: 11.5px; font-weight: 600; line-height: 1.25; color: rgba(255,255,255,0.85); min-height: 29px; }
   .card-foot {
     font-size: 11.5px; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase;
     margin-top: 3px;
   }
-  .card.owned { background: #eef7fb; }
-  .card.owned .card-foot { color: #1d8fa3; }
-  .card.equipped { background: var(--gold); box-shadow: 0 4px 0 #c99a1d; }
-  .card.locked .card-foot { color: var(--accent); }
+  /* A price is the shell mark and the number, kept on one baseline. It is the
+     one thing on an unbought card that isn't knocked back, so it wears the
+     display face at headline size rather than the footer's small caps. */
+  .card-foot .cost {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--cb-display); font-weight: 400;
+    font-size: 22px; line-height: 1.05; letter-spacing: 0.02em;
+    text-transform: none; text-shadow: 0 2px 0 rgba(0,0,0,0.4);
+  }
+  .card-foot .cost .ico-svg { width: 18px; height: 18px; color: #e8a33d; }
+  .card.owned { --plate-tint: var(--cb-tint-blue); }
+  .card.owned .card-foot { color: #bfe6ff; }
+  /* fitted: yellow plate, dark text, and the pack's focus ring instead of the
+     resting border (metaui swaps the cb-ring-* class) */
+  /* the focus ring is drawn to sit just outside the frame, as in the kit */
+  .card.equipped { --plate-tint: var(--cb-tint-gold); --ring-out: 3px; color: var(--cb-yellow-text); }
+  .card.equipped .card-blurb { color: rgba(61,43,0,0.75); }
+  /* Still for sale: the whole card is knocked back to grey — plate, ring, art
+     and words — so a tab reads as what you own at a glance and the shop sits
+     behind it. The price is the exception, lit yellow, because it's the only
+     question a card you don't own is asking. */
+  .card.locked { --plate-tint: var(--cb-tint-dim); }
+  .card.locked::after { filter: saturate(0.2) brightness(0.72); }
+  .card.locked .card-art { filter: saturate(0.2) brightness(0.7); }
+  .card.locked .card-shot { background: linear-gradient(#2c3040, #1c1f2b); }
+  .card.locked .card-nm { color: rgba(255,255,255,0.66); }
+  .card.locked .card-blurb { color: rgba(255,255,255,0.45); }
+  .card.locked .card-foot { color: var(--cb-yellow); }
+  /* Both of these used to rotate and scale. On a nine-slice that re-rasterises
+     the frame mid-animation and the joins show, so the refusal is a pure
+     sideways shake and the purchase is a hop plus a flash of the focus ring —
+     translate and filter only (NOTICE-casual-blue.md). */
   .card.poor { animation: cardNope 0.34s ease; }
   @keyframes cardNope {
     0%, 100% { transform: translateX(0); }
-    20% { transform: translateX(-7px) rotate(-2deg); }
-    50% { transform: translateX(7px) rotate(2deg); }
+    20% { transform: translateX(-7px); }
+    50% { transform: translateX(7px); }
     75% { transform: translateX(-4px); }
   }
   .card.bought { animation: cardYes 0.5s cubic-bezier(0.2,1.5,0.4,1); }
   @keyframes cardYes {
-    0% { transform: scale(1); }
-    40% { transform: scale(1.14) rotate(-2deg); background: var(--gold); }
+    0% { transform: translateY(0); }
+    40% { transform: translateY(-10px); filter: drop-shadow(0 3px 5px rgba(0,0,0,0.22)) brightness(1.3); }
     100% { transform: scale(1); }
   }
 
-  /* cup + class picker */
-  .meta-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  /* cup + class picker
+     Three steps, one pane at a time — cup, class, then the plate you press.
+     A phone can't hold seven cup cards, four class cards and a start button in
+     one column, and asking one question at a time also lets each card carry the
+     blurb and the lock hint it never had room for. */
+  .step-bar { display: flex; gap: 6px; }
+  .step-chip {
+    flex: 1 1 0; min-width: 0; cursor: pointer;
+    font-family: inherit; color: var(--cb-ink);
+    display: flex; flex-direction: column; align-items: flex-start; gap: 0;
+    padding: 5px 12px 7px; text-align: left;
+    background: none; border: none; /* the plate is the sprite; see .btn */
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+    transition: transform 0.08s ease;
+  }
+  .step-chip:hover { transform: translateY(-2px); }
+  .step-chip.sel { color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,0.28); }
+  .step-chip .step-n {
+    font-family: var(--cb-display); font-weight: 400; font-size: 14px;
+    letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.75;
+  }
+  /* the chip doubles as the receipt for the step behind you, so the choice you
+     already made stays on screen once its pane has gone */
+  .step-chip .step-val {
+    font-family: var(--cb-display); font-weight: 400; font-size: 15px;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* min-height:0 or the flex child won't shrink and the pane clips with no
+     way to scroll to the bottom of it */
+  .step-body { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 4px 6px; }
+  .step-foot { display: flex; align-items: center; gap: 10px; }
+  .step-foot #cup-go { margin-left: auto; }
+  /* step three is the button, so it gets the room the other two steps used */
+  .btn.go-big { font-size: clamp(22px, 5vw, 34px); padding: 14px 44px 18px; flex: 1; }
+
+  .pick-grid { display: grid; gap: 8px; }
+  .pick-grid.cups { grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); }
+  /* one class to a row, so the ladder reads top to bottom and the two numbers
+     on the right line up into a column you can compare down. A wide window
+     folds it into two — four rungs of a 64px row leave a laptop half empty and
+     a short one clipping the bottom card. */
+  .pick-grid.tiers { grid-template-columns: minmax(0, 1fr); max-width: 560px; margin: 0 auto; }
+  @media (min-width: 720px) {
+    .pick-grid.tiers { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: none; }
+  }
   .pick {
-    font-family: inherit; cursor: pointer; color: var(--ink); flex: 1 1 130px;
+    font-family: inherit; cursor: pointer; color: var(--ink);
     display: flex; flex-direction: column; align-items: center; gap: 1px;
     padding: 10px 8px; border-radius: 18px;
     border: 3px solid var(--ink); background: #fff;
@@ -629,8 +874,43 @@
     font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6;
   }
   .pick.tier.sel { background: var(--tier); box-shadow: 0 4px 0 rgba(22,50,74,0.45); }
-  .pick.tier .pick-nm { font-size: 20px; }
+  /* A class card reads across, not down: its water, then its name and its line,
+     then the two numbers. Stacked, four of these filled a phone on their own;
+     laid across, the whole ladder is on screen at once and the eye can run down
+     the right-hand column comparing rivals and payout. */
+  .pick.tier {
+    flex-direction: row; align-items: center; text-align: left;
+    gap: 10px; padding: 7px 10px;
+  }
+  /* the water the class puts you on (scripts/gen-class-art.mjs) */
+  .tier-art {
+    width: 48px; height: 48px; flex: none; border-radius: 12px;
+    background-image: var(--art); background-size: cover; background-position: center;
+    box-shadow: inset 0 0 0 2.5px rgba(22,50,74,0.35);
+  }
+  /* A locked class keeps its colour where the other picks lose theirs: the
+     whole reason it shows its water is to be wanted, and .pick.locked's 0.5
+     fades the thumb to a grey smudge. Fog the card, not the lake. */
+  .pick.tier.locked { opacity: 1; background: #b9c3d4; color: #33415c; }
+  .pick.tier.locked .tier-art { filter: saturate(0.72) brightness(0.94); }
+  .tier-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .tier-head { display: flex; align-items: baseline; gap: 7px; }
+  .pick.tier .pick-nm { font-size: 22px; line-height: 1.05; }
+  .pick-blurb { font-size: 11.5px; font-weight: 700; line-height: 1.25; opacity: 0.75; }
+  /* the two numbers, right-aligned so they stack into a column across the four
+     cards and can be compared without reading a word */
+  .tier-nums { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .tier-num { display: flex; align-items: baseline; gap: 4px; }
+  .tier-num b { font-family: var(--cb-display); font-weight: 400; font-size: 15px; }
+  .tier-num i {
+    font-style: normal; font-size: 9.5px; font-weight: 900;
+    letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.55;
+  }
   .ico-lock { width: 11px; height: 11px; flex: none; }
+  /* every drawn glyph out of icons.js — sized by whatever it sits in */
+  .ico-svg { width: 16px; height: 16px; flex: none; display: block; }
+  #garage-btn { display: inline-flex; align-items: center; gap: 7px; }
+  #garage-btn .ico-svg { width: 15px; height: 15px; }
   .place-pip {
     width: 8px; height: 8px; border-radius: 50%; flex: none;
     background: var(--pip); box-shadow: 0 0 0 1.5px rgba(8,24,40,0.4);
@@ -666,8 +946,70 @@
     background: linear-gradient(to top, rgba(48,60,72,0.8) 16%, rgba(48,60,72,0.28) 60%, rgba(48,60,72,0.04) 95%);
   }
 
-  #cup-go { align-self: center; }
   #cup-go:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+  /* step three: what you picked, laid out as a start line */
+  .go-pane, .go-side { display: flex; flex-direction: column; gap: 8px; }
+  /* a wide window puts the lake beside the details rather than above them */
+  @media (min-width: 720px) {
+    .go-pane { flex-direction: row; align-items: stretch; gap: 12px; }
+    .go-pane > * { flex: 1 1 0; min-width: 0; }
+  }
+  .go-art {
+    position: relative; overflow: hidden; border-radius: 18px;
+    min-height: 132px; padding: 12px 14px; color: #fff;
+    display: flex; flex-direction: column; justify-content: flex-end; gap: 3px;
+    border: 3px solid var(--ink); background-color: #1a3550;
+    background-image: var(--art); background-size: cover; background-position: center;
+  }
+  .go-art::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(to top, rgba(10,28,45,0.92) 16%, rgba(10,28,45,0.3) 58%, rgba(10,28,45,0) 94%);
+  }
+  .go-art > * { position: relative; z-index: 1; }
+  .go-cup {
+    font-family: var(--cb-display); font-weight: 400; font-size: clamp(22px, 5vw, 30px);
+    text-shadow: 0 2px 4px rgba(6,20,34,0.6);
+  }
+  .go-class {
+    align-self: flex-start; color: var(--ink); background: var(--tier);
+    font-size: 12px; font-weight: 900; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 3px 10px 4px; border-radius: 999px; box-shadow: 0 2px 0 rgba(22,50,74,0.4);
+  }
+  .go-blurb { font-size: 12.5px; font-weight: 600; line-height: 1.35; color: rgba(255,255,255,0.85); }
+  /* four boxes across even on the narrowest phone — a stat wrapping to its own
+     row pushes the track list off the bottom of the pane */
+  .go-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 6px; }
+  .go-stat {
+    display: flex; flex-direction: column; gap: 1px; align-items: center;
+    padding: 7px 6px; border-radius: 12px; background: rgba(10,16,50,0.4);
+    box-shadow: inset 0 0 0 2px rgba(159,178,232,0.18);
+  }
+  .go-stat .k {
+    font-size: 10px; font-weight: 900; letter-spacing: 0.12em;
+    text-transform: uppercase; color: #8fa4de;
+  }
+  .go-stat .v {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--cb-display); font-weight: 400; font-size: 17px;
+  }
+  .go-tracks { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+  .go-track {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 13px; font-weight: 800;
+    padding: 6px 10px; border-radius: 11px; background: rgba(10,16,50,0.34);
+  }
+  .go-track .n {
+    display: grid; place-items: center; flex: none;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: var(--cb-yellow); color: var(--cb-yellow-text);
+    font-size: 11px; font-weight: 900;
+  }
+  /* the top class turns every hole round again — worth a word before you start */
+  .go-warn {
+    font-size: 12px; font-weight: 800; color: var(--cb-yellow);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
 
   /* payout tally under the podium */
   #payout {
@@ -683,6 +1025,8 @@
     animation: payIn 0.35s ease forwards;
   }
   .pay-row .amt { font-weight: 900; color: #1d8fa3; }
+  .pay-row .amt.shells { display: inline-flex; align-items: center; gap: 5px; }
+  .pay-row .amt .ico-svg { width: 15px; height: 15px; color: #e8a33d; }
   .pay-row.total {
     border-top: 2.5px dashed rgba(22,50,74,0.35); margin-top: 4px; padding-top: 5px;
     font-size: 17px;
@@ -698,17 +1042,22 @@
     .meta-panel { padding: 12px; border-radius: 20px; gap: 8px; }
     .meta-cards { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
     .card-blurb { font-size: 10.5px; min-height: 26px; }
-    .card-shot { height: 54px; }
-    .pick { flex-basis: 100px; }
+    .card-shot, .card-art { height: 54px; }
+    /* two cups to a row on a phone */
+    .pick-grid.cups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .tier-art { width: 44px; height: 44px; border-radius: 11px; }
+    .pick.tier { gap: 9px; padding: 6px 9px; }
+    .pick.tier .pick-nm { font-size: 19px; }
+    .step-chip { padding: 4px 9px 6px; }
+    .step-chip .step-n { font-size: 12px; }
+    .step-chip .step-val { font-size: 13px; }
     #shell-hud { font-size: 17px; padding: 5px 13px 5px 10px; }
     #patterns { max-width: 92vw; }
     .pattern-chip { padding: 8px 13px; font-size: 11.5px; }
-    #rock-stats { gap: 10px; padding: 10px 14px; }
-    .stat { min-width: 66px; }
   }
   /* ---------- short windows (landscape phones) ---------- */
   @media (max-height: 560px) {
-    #phase-title { margin-top: 1.5vh; }
+    #phase-title { margin-top: 5vh; }
     #color-bar { height: 62vh; }
     #size-bar { height: 46vh; }
   }
@@ -736,6 +1085,11 @@
 
 <!-- race HUD -->
 <div id="race-hud" class="layer hidden">
+  <div id="start-signal">
+    <i class="lamp red"></i>
+    <i class="lamp amber"></i>
+    <i class="lamp green"></i>
+  </div>
   <canvas id="minimap" width="190" height="190"></canvas>
   <div id="finishers" class="hidden"></div>
   <div id="hole-timer" class="hidden">
@@ -752,11 +1106,6 @@
   <button id="phase-back" class="btn small blue hidden" aria-label="back">←</button>
   <div id="phase-title">FIND YOUR ROCK</div>
   <div id="phase-bottom">
-    <div id="rock-stats" class="hidden">
-      <div class="stat flat"><label>FLAT</label><div class="bar"><i id="stat-flat"></i></div></div>
-      <div class="stat heft"><label>HEFT</label><div class="bar"><i id="stat-heft"></i></div></div>
-      <div class="stat grit"><label>GRIT</label><div class="bar"><i id="stat-grit"></i></div></div>
-    </div>
     <div id="paint-ui" class="hidden">
       <div id="color-bar" class="paint-slider" role="slider" tabindex="0"
            aria-label="paint colour" aria-valuemin="0" aria-valuemax="100" aria-valuenow="15">
@@ -773,9 +1122,8 @@
       <input id="name-input" type="text" maxlength="20" autocomplete="off" spellcheck="false" aria-label="name your rock">
       <button id="name-ok" class="btn small">Save it →</button>
     </div>
-    <button id="shelf-release" class="btn small danger hidden">Toss it back</button>
     <div id="phase-buttons">
-      <button id="garage-btn" class="btn small blue hidden">🔧 Garage</button>
+      <button id="garage-btn" class="btn small blue hidden"><span class="ico" data-icon="wrench"></span>Garage</button>
       <button id="phase-next" class="btn small hidden">Next →</button>
     </div>
   </div>
@@ -783,6 +1131,7 @@
 
 <!-- name plates over the bench slots, and the finger that points at a free one -->
 <div id="shelf-tags" class="layer"></div>
+<button id="shelf-release" class="btn small danger hidden">Toss away</button>
 <img id="tap-hand" class="hidden" src="tap-hand.png" alt="" draggable="false">
 
 <!-- title -->
@@ -824,13 +1173,13 @@
 </div>
 
 <!-- shells: the career currency, on screen everywhere but mid-race -->
-<div id="shell-hud" class="hidden"><span class="ico">🐚</span><span id="shell-count">0</span></div>
+<div id="shell-hud" class="hidden cb-plate cb-pill"><span class="ico" data-icon="shell"></span><span id="shell-count">0</span></div>
 
 <!-- the garage: two upgrade sockets, hats, floaters and trails for one stone -->
 <div id="garage-ui" class="layer meta-scrim hidden">
-  <div class="meta-panel">
+  <div class="meta-panel cb-plate cb-popup">
     <div class="meta-head">
-      <div class="meta-title">The Garage</div>
+      <div class="meta-title cb-title">The Garage</div>
       <div class="meta-sub" id="garage-rock"></div>
       <button id="garage-close" class="btn small blue">Done</button>
     </div>
@@ -840,17 +1189,23 @@
   </div>
 </div>
 
-<!-- cup + class picker -->
+<!-- cup + class picker: one question per step (metaui.js) -->
 <div id="cup-ui" class="layer meta-scrim hidden">
-  <div class="meta-panel">
+  <div class="meta-panel cb-plate cb-popup">
     <div class="meta-head">
-      <div class="meta-title">Pick your cup</div>
+      <div class="meta-title cb-title" id="cup-title">Pick your cup</div>
       <button id="cup-close" class="btn small blue">← Bench</button>
     </div>
-    <div id="cup-list" class="meta-row"></div>
-    <div class="meta-label">Class</div>
-    <div id="tier-list" class="meta-row"></div>
-    <button id="cup-go" class="btn">Race! →</button>
+    <div id="cup-steps" class="step-bar"></div>
+    <div id="cup-body" class="step-body">
+      <div id="cup-list" class="pick-grid cups"></div>
+      <div id="tier-list" class="pick-grid tiers"></div>
+      <div id="cup-summary" class="go-pane"></div>
+    </div>
+    <div class="step-foot">
+      <button id="cup-back" class="btn small white">← Back</button>
+      <button id="cup-go" class="btn blue">Next →</button>
+    </div>
   </div>
 </div>
 
@@ -862,6 +1217,7 @@
     <div id="payout" class="hidden"></div>
   </div>
   <div id="results-btns">
+    <button id="results-next-btn" class="btn hidden">Continue →</button>
     <button id="next-cup-btn" class="btn hidden">Next cup →</button>
     <button id="again-btn" class="btn blue">Back to the bench</button>
   </div>

@@ -204,3 +204,24 @@ export function resetMeta() {
   saveMeta();
   return cache;
 }
+
+/**
+ * Debug: hand over the whole game at once, for the tweak menu's level jumper.
+ *
+ * Unlocking a cup isn't a flag — cups.js derives it from the records book, so
+ * the only way to open everything is to write a win into every cup×class. The
+ * ids arrive from the caller rather than being looked up here: this module is
+ * the store for the catalogues, not a reader of them, and importing cups.js
+ * back into it would close a cycle.
+ */
+export function unlockAll({ records = [], upgrades = [], cosmetics = {}, purse = 0 } = {}) {
+  const m = loadMeta();
+  for (const [cupId, tierId] of records) m.records[recKey(cupId, tierId)] = 1;
+  m.upgrades = [...new Set([...m.upgrades, ...upgrades])];
+  for (const kind of ["hat", "floater", "trail"]) {
+    if (cosmetics[kind]) m.owned[kind] = [...new Set([...m.owned[kind], ...cosmetics[kind]])];
+  }
+  m.shells = Math.max(m.shells, purse);
+  saveMeta();
+  return m;
+}

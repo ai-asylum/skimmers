@@ -4,7 +4,7 @@
  * The shop cards used to wear emoji stand-ins, which meant buying a Sombrero on
  * the strength of a cactus. Every card here shows the real article instead: the
  * hats come out of the same builders the stone on the bench wears
- * (cosmetics.js), the floaters are the same lifebuoy repainted (lifebuoy.js),
+ * (cosmetics.js), the floaters are the rings themselves (lifebuoy.js),
  * and the trails are the actual per-frame recipes a flying stone emits, running
  * on a stone flying across the card.
  *
@@ -24,7 +24,7 @@ import * as THREE from "three";
 import { CelShader } from "./celshader.js";
 import { Particles } from "./particles.js";
 import { makeHat, paintFloater, emitTrail } from "./cosmetics.js";
-import { makeLifebuoy } from "./lifebuoy.js";
+import { makeFloater } from "./lifebuoy.js";
 import { addOutline } from "./outline.js";
 
 const CELL_GAP = 90;      // world units between cells — further than any trail carries
@@ -45,12 +45,22 @@ const EDGE = 3;         // px held back from the display box's rounded corners
 // trail. Ink is already a cloud at one.
 const PUFFS = { ink: 1 };
 
+// An item you haven't bought greys out on its card, and the display box has to
+// grey with it. Nothing in the card's own CSS can reach inside the box — the
+// previews are one canvas laid over the whole grid — so a locked slot gets a
+// wash of the box's grey painted over it once its item is drawn.
+const VEIL_COLOR = 0x343a4c;
+const VEIL_ALPHA = 0.6;
+
 // Hats face the camera at three-quarters and sway rather than spin: a cap you
 // can only read for a third of its turn is a worse shop card than one you can
 // always read. The stone's front is +x in the game (that's the way it travels
 // and where its face is), so -90° swings that round to the viewer.
 const HAT_YAW = -Math.PI / 4;
 const HAT_SWAY = 0.35;
+// A floater's front is +z, so a smaller turn puts it at the same three-quarters.
+const FLOATER_YAW = -0.5;
+const FLOATER_SWAY = 0.28;
 
 // A long lens on the hats and rings keeps them from bulging; the trails want a
 // much longer one still, because point sprites shrink with distance and the
@@ -102,8 +112,20 @@ class Stage {
     this.particles = new Particles(this.scene, { spray: 700, glow: 1400, rings: 0, feathers: 0 });
     this.pointClouds = [this.particles.spray.points, this.particles.glow.points];
 
+    // the grey wash for a locked slot: a screen-filling quad in its own scene,
+    // drawn over the slot's viewport after the item
+    this.veil = new THREE.Scene();
+    this.veilCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    this.veil.add(new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.MeshBasicMaterial({
+        color: VEIL_COLOR, transparent: true, opacity: VEIL_ALPHA,
+        depthTest: false, depthWrite: false,
+      }),
+    ));
+
     this.cells = new Map(); // "kind:id" -> cell, kept for the session
-    this.slots = [];        // { el, cell } for the cards currently on the grid
+    this.slots = [];        // { el, cell, locked } for the cards on the grid
     this.container = null;
     this.running = false;
     this.elapsed = 0;
@@ -149,14 +171,16 @@ class Stage {
         cell.hat = hat;
       }
     } else if (kind === "floater") {
-      // the ring is built lying flat for the water; lean it back towards the
-      // camera so the card shows a fat ellipse instead of a bar
+      // The ring is built lying flat for the water; tip its near edge down so
+      // the card shows a fat ellipse instead of a bar — and shows the side the
+      // sprinkles, buttons and duck's head are on, rather than the underside.
       const tilt = new THREE.Group();
-      tilt.rotation.x = -0.72;
-      const buoy = makeLifebuoy();
+      tilt.rotation.x = 0.3;
+      const buoy = makeFloater(id);
       paintFloater(buoy, id);
       tilt.add(buoy.group);
       content.add(tilt);
+      content.rotation.y = FLOATER_YAW; // frame it in the pose it is shown in
       cell.buoy = buoy;
       cell.tilt = tilt;
     } else {
@@ -209,8 +233,11 @@ class Stage {
     }
 
     if (cell.buoy) {
-      // rolling in its own plane, lolling like the ones on the bench seat
-      cell.buoy.group.rotation.z += 0.45 * dt;
+      // Swaying rather than turning: a floater has a front now (the duck's head,
+      // the donut's fattest drip), and a card that swings it out of sight for
+      // half its turn is a worse shop card than one you can always read. Held at
+      // three-quarters, lolling like the ones on the bench seat.
+      cell.content.rotation.y = FLOATER_YAW + Math.sin(this.elapsed * 0.5 + cell.phase) * FLOATER_SWAY;
       cell.tilt.rotation.z = Math.sin(this.elapsed * 0.8) * 0.07;
     }
 
@@ -256,7 +283,7 @@ class Stage {
       const [kind, id] = el.dataset.preview.split(":");
       if (!kind || !id) continue;
       el.classList.add("live"); // the emoji underneath steps aside
-      this.slots.push({ el, cell: this.cellFor(kind, id) });
+      this.slots.push({ el, cell: this.cellFor(kind, id), locked: el.hasAttribute("data-locked") });
     }
     if (this.slots.length) this.start();
     else this.stop();
@@ -307,10 +334,10 @@ class Stage {
 
     // only the cards actually on screen get animated or drawn
     const live = [];
-    for (const { el, cell } of this.slots) {
+    for (const { el, cell, locked } of this.slots) {
       const r = el.getBoundingClientRect();
       if (r.bottom <= box.top || r.top >= box.bottom || !r.width || !r.height) continue;
-      live.push({ cell, r });
+      live.push({ cell, r, locked });
       this._animate(cell, dt);
     }
     this.particles.update(dt);
@@ -319,7 +346,7 @@ class Stage {
     gl.setScissorTest(false);
     gl.clear();
     gl.setScissorTest(true);
-    for (const { cell, r } of live) {
+    for (const { cell, r, locked } of live) {
       const x = r.left - box.left;
       const y = box.bottom - r.bottom; // viewports count up from the bottom
       // The viewport carries the whole card slot, so the framing never shifts;
@@ -334,6 +361,11 @@ class Stage {
       this._aim(cell, r.width / r.height);
       for (const p of this.pointClouds) p.visible = cell.kind === "trail";
       gl.render(this.scene, cell.camera);
+      if (locked) {
+        gl.autoClear = false; // the wash goes over the item, not instead of it
+        gl.render(this.veil, this.veilCam);
+        gl.autoClear = true;
+      }
     }
     gl.setScissorTest(false);
   }

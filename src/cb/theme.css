@@ -1,0 +1,167 @@
+/**
+ * Casual Blue: the parts that aren't sprites.
+ *
+ * Palette, tint filters and the display face, sampled from the kit's
+ * src/theme/tokens.ts. Sprite classes are generated next door in cb.css; this
+ * file is written by hand and safe to edit.
+ */
+
+/* Lilita One is the pack's own display face. Self-hosted, like Baloo 2 next to
+   it in index.html, because the Capacitor Android shell has no network when it
+   boots and a CDN link there means the UI renders in a fallback for the first
+   session. Single weight — the face only ships 400. */
+@font-face {
+  font-family: "Lilita One";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/lilita-one-latin-400-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: "Lilita One";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/lilita-one-latin-ext-400-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
+:root {
+  /* the pack's palette (kit src/theme/tokens.ts) */
+  --cb-ink: #2a3a6b;      /* dark navy for text on white */
+  --cb-soft: #5a6a99;
+  --cb-navy: #1d2b6e;
+  --cb-navy-deep: #152055;
+  --cb-yellow: #ffc837;
+  --cb-yellow-deep: #f5a623;
+  --cb-yellow-text: #3d2b00; /* yellow buttons carry dark text */
+  --cb-green: #5ac431;
+  --cb-red: #f2493a;
+  --cb-cyan: #41d6c3;
+  --cb-orange: #f8821c;
+  --cb-gray: #8b8b9a;
+  --cb-dimmer: rgba(10, 16, 50, 0.66);
+
+  --cb-display: "Lilita One", "Baloo 2", system-ui, sans-serif;
+
+  /* Much of the pack is drawn pure white so it can be coloured at runtime (Unity
+     tints it with Image.color; we use a CSS filter). White has no chroma to
+     push, so each chain darkens it, sepia gives it some, then saturate and
+     hue-rotate steer that to the colour named in the comment.
+
+     These are fitted rather than hand-tuned: `node scripts/cb-tint.mjs "#ffc837"`
+     solves the chain that lands on a given hex, so a token means an actual
+     colour instead of a guess. The kit's own chains are tuned against its
+     shaded sprites and go neon on the flat frames we use.
+
+     Only ever on a sprite layer. A filter applies to the whole subtree, so
+     tinting an element with text in it drags the text along; .cb-plate exists
+     to keep the sprite on its own layer. */
+  --cb-tint-gold: brightness(0.70) sepia(1) saturate(3.73) hue-rotate(-12deg) brightness(1.02);   /* #ffc837 */
+  --cb-tint-sky: brightness(0.30) sepia(1) saturate(3.51) hue-rotate(164deg) brightness(1.55);    /* #3aa0f0 */
+  --cb-tint-blue: brightness(0.65) sepia(1) saturate(4.75) hue-rotate(178deg) brightness(0.52);   /* #2d6fd8 */
+  --cb-tint-navy: brightness(0.38) sepia(1) saturate(3.37) hue-rotate(191deg) brightness(0.38);   /* #232c52 */
+  --cb-tint-panel: brightness(0.49) sepia(1) saturate(3.71) hue-rotate(189deg) brightness(0.24);  /* #1b2547 */
+  --cb-tint-green: brightness(0.51) sepia(1) saturate(3.26) hue-rotate(59deg) brightness(1.02);   /* #5ac431 */
+  --cb-tint-red: brightness(0.52) sepia(1) saturate(5.21) hue-rotate(-44deg) brightness(0.67);    /* #f2493a */
+  /* no hue to fit: these just knock a sprite back */
+  --cb-tint-gray: saturate(0) brightness(0.75);
+  --cb-tint-dim: saturate(0.25) brightness(0.5);
+}
+
+/* ---------------------------------------------------------------- display text
+   The pack sets titles as outlined display text rather than baked-in word art,
+   which is what lets the game keep real, translatable strings.
+
+   Baloo 2 elsewhere in the game needs `paint-order: stroke fill` because it is
+   a variable font whose glyphs keep overlapping contours. Lilita One is static
+   and single-weight with clean outlines, so a plain stroke behaves — but Safari
+   still refuses to paint -webkit-text-stroke outside the fill, so the ring of
+   text-shadows is what actually draws the outline everywhere. */
+.cb-title {
+  font-family: var(--cb-display);
+  font-weight: 400; /* Lilita One is only ever 400; asking for 900 synthesises */
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+  color: #fff;
+  text-shadow:
+    2px 0 0 var(--cb-navy-deep), 1.41px 1.41px 0 var(--cb-navy-deep),
+    0 2px 0 var(--cb-navy-deep), -1.41px 1.41px 0 var(--cb-navy-deep),
+    -2px 0 0 var(--cb-navy-deep), -1.41px -1.41px 0 var(--cb-navy-deep),
+    0 -2px 0 var(--cb-navy-deep), 1.41px -1.41px 0 var(--cb-navy-deep),
+    0 3px 0 var(--cb-navy-deep);
+}
+.cb-title.thin {
+  text-shadow:
+    1px 0 0 var(--cb-navy-deep), 0.71px 0.71px 0 var(--cb-navy-deep),
+    0 1px 0 var(--cb-navy-deep), -0.71px 0.71px 0 var(--cb-navy-deep),
+    -1px 0 0 var(--cb-navy-deep), -0.71px -0.71px 0 var(--cb-navy-deep),
+    0 -1px 0 var(--cb-navy-deep), 0.71px -0.71px 0 var(--cb-navy-deep);
+}
+/* on a pale panel the outline is the wrong way round: dark text, no ring */
+.cb-title.dark { color: var(--cb-ink); text-shadow: none; }
+
+/* ---------------------------------------------------------------- nine-slice
+   Two ways to wear a sprite from cb.css, which publishes each one as --plate,
+   --plate-slice and --plate-w.
+
+   `.cb-face` paints it straight onto the element. Cheapest, and right whenever
+   the sprite is already the colour you want.
+
+   `.cb-plate` paints it onto a backdrop layer instead, which is what makes
+   tinting possible: most of this pack is drawn pure white so it can be coloured
+   at runtime, but a CSS filter applies to an element's entire subtree, so
+   tinting the element would drag its text along with it. Setting --plate-tint
+   colours the sprite and leaves the words alone.
+
+   `isolation: isolate` is load-bearing. The backdrop sits at z-index -1, and
+   without a stacking context of its own it would slide behind an ancestor's
+   background — here that means vanishing behind the modal scrim. */
+.cb-face {
+  box-sizing: border-box;
+  border-style: solid;
+  border-color: transparent;
+  border-image-repeat: stretch;
+  border-image-source: var(--plate);
+  border-image-slice: var(--plate-slice);
+  border-width: var(--plate-w);
+}
+.cb-plate { position: relative; isolation: isolate; }
+.cb-plate::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-style: solid;
+  border-color: transparent;
+  border-image-repeat: stretch;
+  border-image-source: var(--plate);
+  border-image-slice: var(--plate-slice);
+  border-width: var(--plate-w);
+  filter: var(--plate-tint, none);
+}
+
+/* `.cb-ringed` adds the second sprite the pack draws for most frames: an
+   untinted outline over the tinted fill, which is what keeps a coloured card
+   crisp against a dark field. Add a `cb-ring-*` class for the sprite, and
+   `--ring-out` to push a selection ring outside the box. Rings never carry
+   `fill`, so this paints only the edges and leaves the content alone. */
+.cb-ringed::after {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--ring-out, 0px));
+  pointer-events: none;
+  border-style: solid;
+  border-color: transparent;
+  border-image-repeat: stretch;
+  border-image-source: var(--ring);
+  border-image-slice: var(--ring-slice);
+  border-width: var(--ring-w);
+}
+
+/* ---------------------------------------------------------------- icons
+   Sprite classes in cb.css already set the sprite's own half-size; this just
+   makes it an inline block that never stretches in a flex row. Override width
+   and height only downwards — above 0.5× the art goes soft. */
+.cb-ico { display: inline-block; flex: none; }

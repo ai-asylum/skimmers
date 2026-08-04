@@ -168,6 +168,13 @@ class Scatter {
   commit() { for (const m of this.meshes) m.instanceMatrix.needsUpdate = true; }
 }
 
+/** a biome's multiplier for a model, matched on the name before the underscore */
+function mixFor(mix, model) {
+  if (!mix) return 1;
+  for (const key of Object.keys(mix)) if (model.startsWith(key)) return mix[key];
+  return 1;
+}
+
 /** weighted pick over entries carrying a `weight`, restricted to `eligible` */
 function pickWeighted(entries, eligible, rand = Math.random) {
   let total = 0;
@@ -226,7 +233,9 @@ const _clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 export class Trees {
   constructor(scene) {
-    this.total = 110;
+    this.base = 110;
+    this.total = this.base;
+    this.mix = null; // per-species weight multipliers, keyed by model prefix
     const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true });
     // Dead below a fifth of the tree's height so the trunk stays rooted, full by
     // the top: the trunk holds still and the canopy stirs.
@@ -268,9 +277,26 @@ export class Trees {
     }
   }
 
+  /**
+   * Lean the forest one way or the other. `mix` maps a model-name prefix to a
+   * multiplier on that species' weight — `{ PineTree: 2.5, Willow: 0 }` is a
+   * cold hillside with nothing hanging over the water. Takes effect on the next
+   * setHole, which is every hole.
+   */
+  setMix(mix) {
+    this.mix = mix ?? null;
+    this.weights = TREE_SPECIES.map((s) => ({
+      ...s,
+      weight: s.weight * mixFor(mix, s.model),
+    }));
+  }
+  /** thin or thicken the treeline; 1 is the shipped 110 */
+  setDensity(mul = 1) { this.total = Math.round(this.base * mul); }
+
   /** re-plant the forest on the grassy banks of the current hole */
   setHole() {
     this.scatter.clear();
+    const species = this.weights ?? TREE_SPECIES;
     const rand = mulberry32(SEED_TREES);
     const maxR = LAKE_R * 1.9; // out to the far ends of a corner-to-corner hole
     let placed = 0, guard = 0;
@@ -282,13 +308,13 @@ export class Trees {
       const { y, kind } = terrainSampleAt(x, z);
       if (kind !== "grass") continue; // never on the bed or the beach shelf
       eligible.length = 0;
-      for (let i = 0; i < TREE_SPECIES.length; i++) {
-        const band = TREE_SPECIES[i].y;
-        if (y >= band[0] && y <= band[1]) eligible.push(i);
+      for (let i = 0; i < species.length; i++) {
+        const band = species[i].y;
+        if (y >= band[0] && y <= band[1] && species[i].weight > 0) eligible.push(i);
       }
       if (!eligible.length) continue; // below the shoreline or up on the peaks
-      const i = pickWeighted(TREE_SPECIES, eligible, rand);
-      const [lo, hi] = TREE_SPECIES[i].h;
+      const i = pickWeighted(species, eligible, rand);
+      const [lo, hi] = species[i].h;
       if (this.scatter.place(i, x, y, z, lo + rand() * (hi - lo), 0.09, rand)) placed++;
     }
     this.scatter.commit();
@@ -311,16 +337,54 @@ const PROPS = [
   { model: "WoodLog_Moss", h: [0.6, 1.0], y: [0, 12], weight: 0.6, beach: true },
 ];
 
+// The baked colours of every undergrowth model, kept so a tint can be re-mixed
+// from the original each time instead of compounding on the last one.
+const UNDER_ORIG = new WeakMap();
+function underOrig(geo) {
+  let orig = UNDER_ORIG.get(geo);
+  if (!orig) {
+    orig = Float32Array.from(geo.attributes.color.array);
+    UNDER_ORIG.set(geo, orig);
+  }
+  return orig;
+}
+
 export class Foliage {
   constructor(scene) {
-    this.total = 460;
+    this.base = 460;
+    this.total = this.base;
     const leafy = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true });
     // Undergrowth is short and springy: it stirs from near the ground and moves
     // further, relative to its size, than a tree does.
     patchSway(leafy, 0.06, 0.05, 1.0);
     const solid = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true });
     this.scatter = new Scatter(scene, PROPS, 120, (p) => (p.sway ? leafy : solid));
+    this.geos = PROPS.map((p) => natureGeometry(p.model));
   }
+
+  /**
+   * Turn the undergrowth toward a colour. Unlike the trees this is a wash over
+   * the baked palette rather than a repaint of it, so a bush keeps its berries
+   * and a mossy boulder keeps being a boulder — it just agrees with the season.
+   * `amount` 0 is the model as baked, 1 is the flat tint.
+   */
+  setTint(hex, amount = 0.4) {
+    const tint = new THREE.Color(hex);
+    for (const geo of this.geos) {
+      const orig = underOrig(geo);
+      const arr = geo.attributes.color.array;
+      for (let i = 0; i < arr.length; i += 3) {
+        // keep each vertex's own brightness, borrow the tint's hue
+        const lum = 0.299 * orig[i] + 0.587 * orig[i + 1] + 0.114 * orig[i + 2];
+        arr[i] = orig[i] + (tint.r * lum * 1.6 - orig[i]) * amount;
+        arr[i + 1] = orig[i + 1] + (tint.g * lum * 1.6 - orig[i + 1]) * amount;
+        arr[i + 2] = orig[i + 2] + (tint.b * lum * 1.6 - orig[i + 2]) * amount;
+      }
+      geo.attributes.color.needsUpdate = true;
+    }
+  }
+  /** thin or thicken the scrub; 1 is the shipped 460 */
+  setDensity(mul = 1) { this.total = Math.round(this.base * mul); }
 
   /** re-scatter the undergrowth over the banks of the current hole */
   setHole() {

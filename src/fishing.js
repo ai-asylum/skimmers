@@ -7,9 +7,9 @@
  */
 import * as THREE from "three";
 import { audio } from "./audio.js";
-import { lakeDepthAt, bedHeightAt, DIVE_MIN, WATER_Y } from "./water.js";
+import { lakeDepthAt, bedHeightAt, DIVE_MIN, waterLevelAt } from "./water.js";
 import { terrainHeightAt } from "./terrain.js";
-import { makeLifebuoy } from "./lifebuoy.js";
+import { makeFloater } from "./lifebuoy.js";
 import { paintFloater } from "./cosmetics.js";
 import { DEFAULT_MODS } from "./upgrades.js";
 import { makeFish, updateFishWave, wave as fishWave } from "./fish.js";
@@ -17,6 +17,11 @@ import { makeFish, updateFishWave, wave as fishWave } from "./fish.js";
 const ROCK_Y = 0.55; // local y of the rock on the bed
 export const HOOK_SPEED = 2.0;
 const STEER_RANGE = 8.5;
+// dragging the pointer down pays out line. DRAG_FULL is the stroke speed
+// (screen heights per second) that earns the whole DRAG_BOOST, so a lazy slide
+// is worth almost nothing and a committed sweep roughly triples the descent.
+const DRAG_FULL = 1.2;
+const DRAG_BOOST = 2.2;
 export const BUOY_REST = 0.42; // rock center height above the waterline when nestled in the buoy
 
 // view-picking (see _pickView): the lake is a narrow bowl, so a fixed camera
@@ -56,7 +61,7 @@ export class Fishing {
     buoy.visible = false;
     scene.add(buoy);
     // the lake buoy wears the same floater the player bought for the bench
-    this.buoyRing = makeLifebuoy();
+    this.buoyRing = makeFloater();
     const ringGrp = this.buoyRing.group;
     ringGrp.position.y = 0.12;
     buoy.add(ringGrp);
@@ -65,6 +70,7 @@ export class Fishing {
     this.lineAnchor.position.set(0, 0.4, 0.8);
     buoy.add(this.lineAnchor);
     this.buoyPhase = Math.random() * 10;
+    this.buoyPop = 1; // 0..1 inflate when it's tossed out under a resting stone
 
     // UI
     this.el = document.getElementById("fishing-ui");
@@ -73,6 +79,10 @@ export class Fishing {
     this.swingAng = 0;
     this.swingVel = 0;
     this.prevHookX = 0;
+
+    // downward-drag payout: smoothed 0..1 of DRAG_BOOST
+    this.dragBoost = 0;
+    this._prevPtrY = null;
 
     // ---------- diorama (built once, hidden) ----------
     const g = new THREE.Group();
@@ -220,8 +230,11 @@ export class Fishing {
     this.hits = 0;
     this.phase = "fall"; // fall -> drop -> reel
     spot = this._diveSpot(spot);
+    // the diorama hangs off the bed, and on a terraced hole the bed under this
+    // spot is not at -depth but at its own pool's surface minus the depth
+    this.level = waterLevelAt(spot.x, spot.z);
     this.depth = lakeDepthAt(spot.x, spot.z);
-    this.floorY = -this.depth;
+    this.floorY = this.level - this.depth;
     // local, just under the surface — DIVE_MIN keeps the floor clear of it
     this.hookStart = Math.max(2.4, this.depth - 1.1);
     this._pickView(spot, blockers);
@@ -231,8 +244,10 @@ export class Fishing {
 
     // buoy bobs on the surface above, just past the rock; the line drops from
     // its bow edge, which faces the camera along with the rest of the diorama
-    this.buoy.position.set(this._worldX(0, -0.9), WATER_Y, this._worldZ(0, -0.9));
+    this.buoy.position.set(this._worldX(0, -0.9), this.level, this._worldZ(0, -0.9));
     this.buoy.rotation.set(0, this.camYaw, 0);
+    this.buoy.scale.setScalar(1);
+    this.buoyPop = 1;
     this.buoy.visible = true;
 
     // sit the pebbles and weeds on the bed where they actually stand, so they
@@ -258,6 +273,8 @@ export class Fishing {
     this.swingAng = 0;
     this.swingVel = 0;
     this.prevHookX = 0;
+    this.dragBoost = 0;
+    this._prevPtrY = null;
 
     // deeper water = more fish in the gauntlet, lanes squeezed to the depth.
     // Fish Repellent thins the crowd; it can clear the water completely in the
@@ -280,6 +297,16 @@ export class Fishing {
     this.el.classList.remove("hidden");
   }
 
+  /**
+   * True only while the pointer is actually driving something. The stone's fall
+   * to the bed and the reel back up both play themselves, so a coaching hand put
+   * up on `active` alone would spend half the minigame asking for a gesture that
+   * does nothing. See main's fishHint.
+   */
+  get steering() {
+    return this.active && this.phase === "drop";
+  }
+
   /** camera pose for main's "fishing" mode — aquarium side view, framed to depth */
   getCamPose() {
     const p = this.group.position;
@@ -299,7 +326,7 @@ export class Fishing {
   _diveSpot(spot) {
     const p = { x: spot.x, z: spot.z };
     const step = 1.5;
-    for (let i = 0; i < 24 && -bedHeightAt(p.x, p.z) < DIVE_MIN; i++) {
+    for (let i = 0; i < 24 && lakeDepthAt(p.x, p.z) < DIVE_MIN; i++) {
       const gx = bedHeightAt(p.x + step, p.z) - bedHeightAt(p.x - step, p.z);
       const gz = bedHeightAt(p.x, p.z + step) - bedHeightAt(p.x, p.z - step);
       const l = Math.hypot(gx, gz);
@@ -364,18 +391,33 @@ export class Fishing {
     this._cos = Math.cos(this.camYaw);
   }
 
-  /** pointerX01: pointer x in [0,1] across the screen */
-  update(dt, elapsed, pointerX01 = 0.5) {
+  /** pointerX01/pointerY01: pointer position in [0,1] across/down the screen */
+  update(dt, elapsed, pointerX01 = 0.5, pointerY01 = 0.5) {
     // the buoy rides the real wave field whether we're fishing or it's
     // parked as the player's lie after a catch — inflatables bob lively
     if (this.buoy.visible) {
       const bp = this.buoy.position;
-      bp.y = WATER_Y + this.water.heightAt(bp.x, bp.z, elapsed);
+      // its own terrace, asked fresh every frame: parked as the lie it drifts
+      // with the current, and a hole with falls in it is a staircase of pools
+      bp.y = waterLevelAt(bp.x, bp.z) + this.water.heightAt(bp.x, bp.z, elapsed);
       this.buoy.rotation.z = Math.sin(elapsed * 1.1 + this.buoyPhase) * 0.06;
       this.buoy.rotation.x = Math.cos(elapsed * 1.4 + this.buoyPhase) * 0.05;
+      if (this.buoyPop < 1) {
+        const t = (this.buoyPop = Math.min(1, this.buoyPop + dt * 3.5));
+        this.buoy.scale.setScalar(0.4 + 0.6 * (1 - (1 - t) ** 3) + Math.sin(t * Math.PI) * 0.12);
+      }
     }
     if (!this.active) return;
     this.backMat.uniforms.uTime.value = elapsed;
+
+    // how hard the pointer is being dragged downward, tracked through every
+    // phase so the stone's fall doesn't bank a stroke for the drop to spend
+    const payout = this._prevPtrY == null ? 0 : (pointerY01 - this._prevPtrY) / Math.max(dt, 1e-4);
+    this._prevPtrY = pointerY01;
+    const want = Math.max(0, Math.min(1, payout / DRAG_FULL));
+    // grabs immediately, coasts down afterwards, so repeated flicks keep the
+    // line running instead of stalling between strokes
+    this.dragBoost += (want - this.dragBoost) * Math.min(1, (want > this.dragBoost ? 16 : 3.5) * dt);
 
     // scenery life
     for (const w of this.weeds) {
@@ -467,7 +509,7 @@ export class Fishing {
       // steer + descend
       const targetX = (pointerX01 - 0.5) * 2 * STEER_RANGE * 0.55;
       this.hookX += (targetX - this.hookX) * Math.min(1, 9 * dt);
-      this.hookY -= HOOK_SPEED * this.mods.hookSpeedMul * dt;
+      this.hookY -= HOOK_SPEED * this.mods.hookSpeedMul * (1 + this.dragBoost * DRAG_BOOST) * dt;
       if (this.hookY < this._tickY) {
         this._tickY = this.hookY - 0.5;
         audio.reelTick();
@@ -598,10 +640,23 @@ export class Fishing {
     this.onDone?.(clean, this.hits);
   }
 
-  /** after the catch the buoy drifts under the drop spot and becomes the lie */
+  /**
+   * Put the float under a resting stone and make it the lie. Called after a
+   * catch and, every frame, for any stone floating on open water (main.js
+   * syncFloat) — so a lie the current is walking downstream keeps its donut.
+   */
   parkBuoy(x, z) {
-    this.buoy.position.x = x;
-    this.buoy.position.z = z;
+    if (!this.buoy.visible) {
+      // fresh out of nowhere: turn it so the bought floater's patches don't all
+      // face the same way every time, restart the bob out of step, and let it
+      // swell into place instead of popping in at full size under the stone
+      this.buoy.rotation.set(0, Math.random() * Math.PI * 2, 0);
+      this.buoyPhase = Math.random() * 10;
+      this.buoyPop = 0;
+      this.buoy.scale.setScalar(0.4);
+      this.buoy.visible = true;
+    }
+    this.buoy.position.set(x, waterLevelAt(x, z), z);
   }
 
   hideBuoy() {

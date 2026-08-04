@@ -4,8 +4,10 @@
  * allocation) plus a small pool of expanding ripple-ring meshes for the water.
  */
 import * as THREE from "three";
-
-const WATER_Y = 0;
+// Splashes have to land on the right pool: a hole with waterfalls in it has
+// more than one waterline, so anything that spawns "at the surface" asks the
+// lake how high the surface is under that particular point.
+import { waterLevelAt } from "./water.js";
 
 // ------------------------------------------------------------------ points pool
 class PointPool {
@@ -110,7 +112,7 @@ class PointPool {
       alpha[i] = t < 0.35 ? t / 0.35 : 1;
       size[i] = baseSize[i] * (0.5 + 0.5 * t);
       // droplet re-entering the water: tiny secondary ripple then die
-      if (this.splashOnWater[i] && pos[i3 + 1] <= WATER_Y && vel[i3 + 1] < 0) {
+      if (this.splashOnWater[i] && pos[i3 + 1] <= waterLevelAt(pos[i3], pos[i3 + 2]) && vel[i3 + 1] < 0) {
         if (onWaterHit && Math.random() < 0.3) onWaterHit(pos[i3], pos[i3 + 2]);
         life[i] = 0;
         pos[i3 + 1] = -1000;
@@ -152,7 +154,7 @@ class RingPool {
     r.maxScale = maxScale;
     r.mesh.visible = true;
     r.mesh.material.color.setHex(color);
-    r.mesh.position.set(x, WATER_Y + 0.03 + this.head * 0.0005, z);
+    r.mesh.position.set(x, waterLevelAt(x, z) + 0.03 + this.head * 0.0005, z);
     r.mesh.scale.setScalar(0.05);
   }
 
@@ -274,6 +276,7 @@ export class Particles {
   /** skip splash — ring + fan of droplets kicked up behind the bounce */
   skipSplash(pos, vel, power = 0.7) {
     const p = Math.min(1.4, 0.35 + power);
+    const WATER_Y = waterLevelAt(pos.x, pos.z);
     this.rings.spawn(pos.x, pos.z, 1.6 + 2.2 * p, 0.7 + 0.25 * p);
     this.rings.spawn(pos.x, pos.z, 0.9 + 1.2 * p, 0.5);
     const n = Math.floor(14 + 26 * p);
@@ -305,6 +308,7 @@ export class Particles {
 
   /** vertical plunge column for a sink */
   sinkSplash(pos, big = 1) {
+    const WATER_Y = waterLevelAt(pos.x, pos.z);
     this.rings.spawn(pos.x, pos.z, 2.2 * big, 0.9);
     this.rings.spawn(pos.x, pos.z, 3.4 * big, 1.3);
     const n = Math.floor(30 * big);
@@ -332,6 +336,7 @@ export class Particles {
 
   /** rock-on-rock splash blast */
   blast(pos) {
+    const WATER_Y = waterLevelAt(pos.x, pos.z);
     this.rings.spawn(pos.x, pos.z, 5, 1.1, 0xfff2c0);
     this.rings.spawn(pos.x, pos.z, 3, 0.7);
     for (let i = 0; i < 60; i++) {

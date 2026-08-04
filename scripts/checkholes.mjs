@@ -1,81 +1,111 @@
 /**
- * Sanity-check the authored fairways in src/holes.js.
+ * Sanity-check the authored fairways in src/holes.js and src/playable-levels.js.
  *
- * A hole should read as one long river: it marches from tee to flag and gets
- * its interest from kinks and doglegs, never by curling back on itself. This
- * checks that (straightness), that it stays inside the terrain's mountain ring
- * (maxR), that its legs are long enough for a bend to read as a bend, and that
- * every authored island / spire actually sits in the water it is meant to be in.
+ * The rules themselves live in src/holerules.js, because the admin level editor
+ * runs the same ones live while you drag things about; this script is the build
+ * gate on top of them. If a hole here has anything to say for itself, it says it
+ * and the exit code is 1.
+ *
+ * The playable's levels run against a shorter minimum leg: they're deliberately
+ * a third the size of a real hole, so a leg that would be a wobble on a 400m
+ * fairway is a whole hole there.
  *
  * Run with: node scripts/checkholes.mjs
  */
-import { HOLES } from "../src/holes.js";
+import { HOLES, holeFalls } from "../src/holes.js";
+import { PLAYABLE_HOLES } from "../src/playable-levels.js";
+import { holeWarnings, holeStats, MIN_LEG } from "../src/holerules.js";
+import { buildRoute } from "../src/route.js";
 
-const PLAY_R = 88; // keep every waypoint inside this, see terrain.js MOUNT_INSET
-const MIN_STRAIGHTNESS = 0.72; // chord / walked length — below this it loops
-const MIN_LEG = 26; // shorter than this and a "bend" is just a wobble
-const MAX_TURN = 80; // degrees; past this the elbow folds back on itself
-
-function distToPath(x, z, path) {
-  let d = Infinity;
-  for (let i = 0; i < path.length - 1; i++) {
-    const a = path[i], b = path[i + 1];
-    const bax = b.x - a.x, baz = b.z - a.z;
-    const pax = x - a.x, paz = z - a.z;
-    const h = Math.min(1, Math.max(0, (pax * bax + paz * baz) / (bax * bax + baz * baz || 1)));
-    d = Math.min(d, Math.hypot(pax - bax * h, paz - baz * h));
-  }
-  return d;
-}
+const PROP_KINDS = [
+  ["falls", "falls"], ["wheels", "wheels"], ["bridges", "bridges"], ["caves", "caves"],
+  ["logs", "logs"], ["dams", "dams"],
+  ["rapids", "rapids"], ["ice", "ice"], ["weeds", "weed beds"],
+];
 
 let bad = 0;
-HOLES.forEach((h, hi) => {
-  const p = h.path;
-  const warn = [];
-  let total = 0, maxR = 0, minLeg = Infinity, maxTurn = 0;
-
-  for (let i = 1; i < p.length; i++) {
-    const l = Math.hypot(p[i].x - p[i - 1].x, p[i].z - p[i - 1].z);
-    total += l;
-    minLeg = Math.min(minLeg, l);
-  }
-  for (const pt of p) maxR = Math.max(maxR, Math.hypot(pt.x, pt.z));
-  for (let i = 1; i < p.length - 1; i++) {
-    const ax = p[i].x - p[i - 1].x, az = p[i].z - p[i - 1].z;
-    const bx = p[i + 1].x - p[i].x, bz = p[i + 1].z - p[i].z;
-    const ang = Math.abs(Math.atan2(ax * bz - az * bx, ax * bx + az * bz));
-    maxTurn = Math.max(maxTurn, (ang * 180) / Math.PI);
-  }
-  const chord = Math.hypot(p.at(-1).x - p[0].x, p.at(-1).z - p[0].z);
-  const straight = chord / total;
-
-  if (maxR > PLAY_R) warn.push(`maxR ${maxR.toFixed(1)} > ${PLAY_R}`);
-  if (straight < MIN_STRAIGHTNESS) warn.push(`straightness ${straight.toFixed(2)} — loops back`);
-  if (minLeg < MIN_LEG) warn.push(`leg ${minLeg.toFixed(0)}u too short`);
-  if (maxTurn > MAX_TURN) warn.push(`turn ${maxTurn.toFixed(0)}deg folds back`);
-  if (p.length > 32) warn.push(`${p.length} pts > shader cap 32`);
-
-  // islands are rest stops: they must sit on the centreline. spires are
-  // hazards in the channel: in the water, but not plugging the whole width.
-  for (const isl of h.islands) {
-    const d = distToPath(isl.x, isl.z, p);
-    if (d > 3) warn.push(`island (${isl.x},${isl.z}) is ${d.toFixed(1)}u off the line`);
-  }
-  for (const o of h.rocks) {
-    const d = distToPath(o.x, o.z, p);
-    if (d - o.r > h.width - 1) warn.push(`spire (${o.x},${o.z}) is beached (${d.toFixed(1)}u out)`);
-    if (d + o.r > h.width && d - o.r < -h.width) warn.push(`spire (${o.x},${o.z}) plugs the channel`);
-    for (const isl of h.islands) {
-      if (Math.hypot(o.x - isl.x, o.z - isl.z) < o.r + isl.r) warn.push(`spire (${o.x},${o.z}) sits on an island`);
+function check(holes, label, minLeg = MIN_LEG) {
+  console.log(`\n${label}`);
+  holes.forEach((h, hi) => {
+    const warn = holeWarnings(h, { minLeg });
+    const s = holeStats(h);
+    if (warn.length) bad++;
+    const extra = PROP_KINDS.map(([k, tag]) => (h[k]?.length ? `  ${h[k].length} ${tag}` : "")).join("");
+    // a forked hole is two numbers, not one: what the long way costs and what
+    // the gamble is worth (src/route.js)
+    let fork = "";
+    if (h.branches?.length) {
+      const r = buildRoute(h);
+      fork = `  ${r.forks().length} fork  best ${r.best.toFixed(0)}u (-${((1 - r.best / r.length) * 100).toFixed(0)}%)`;
     }
-  }
+    console.log(
+      `hole ${hi + 1}: ${h.path.length} pts  len ${s.total.toFixed(0)}u  straightness ${s.straight.toFixed(2)}  ` +
+      `maxR ${s.maxR.toFixed(0)}  leg ${s.minLeg.toFixed(0)}u  turn ${s.maxTurn.toFixed(0)}deg  ` +
+      `${h.islands.length} isl  ${h.rocks.length} spires${extra}${fork}  time ${h.time}s`
+    );
+    for (const w of warn) console.log(`   !! ${w}`);
+  });
+}
 
-  if (warn.length) bad++;
-  console.log(
-    `hole ${hi + 1}: ${p.length} pts  len ${total.toFixed(0)}u  straightness ${straight.toFixed(2)}  ` +
-    `maxR ${maxR.toFixed(0)}  leg ${minLeg.toFixed(0)}u  turn ${maxTurn.toFixed(0)}deg  ` +
-    `${h.islands.length} isl  ${h.rocks.length} spires  time ${h.time}s`
-  );
-  for (const w of warn) console.log(`   !! ${w}`);
-});
+/**
+ * The ladder. src/holes.js is ordered so that each hole introduces exactly one
+ * element no hole before it had, and so that between them they introduce every
+ * element the game owns. A hole that brings two new things at once teaches
+ * neither, and a hole that brings none is a hole you have already played — so
+ * both are build failures rather than opinions.
+ *
+ * Two things are not on this list because they are not rungs: the terrace and
+ * the fork. Every hole in the lake steps down at least once and offers at least
+ * two ways down (see the header of src/holes.js), hole 1 teaches both along
+ * with the river, and they are checked below as properties every hole must
+ * have. Three holes are therefore built out of a drop or a choice rather than
+ * out of anything new, and they are named here so that a hole going quiet by
+ * accident still fails the build.
+ */
+const ELEMENTS = [
+  "bridges", "wheels", "caves",
+  "flow", "rapids", "weeds", "logs", "dams", "ice",
+];
+const QUIET = new Map([ // 1-based: holes allowed to introduce nothing, and why
+  [2, "the drop, and only the drop"],
+  [4, "the drop, and only the drop"],
+  [13, "the choice, and only the choice"],
+]);
+const carries = (h, k) => (k === "flow" ? !!h.flow : !!h[k]?.length);
+
+function checkLadder(holes) {
+  console.log("\nthe ladder — one new element per hole");
+  const taught = new Set();
+  holes.forEach((h, i) => {
+    // a dam holds water back, so it is a lip too — either counts as the hole's
+    // own drop (src/holes.js holeFalls)
+    if (!holeFalls(h).length) {
+      bad++;
+      console.log(`hole ${i + 1}: !! no drop anywhere on it — every hole steps down at least once`);
+    }
+    if (!h.branches?.length) {
+      bad++;
+      console.log(`hole ${i + 1}: !! one way down — every hole offers a second`);
+    }
+    const fresh = ELEMENTS.filter((k) => carries(h, k) && !taught.has(k));
+    for (const k of fresh) taught.add(k);
+    const quiet = QUIET.get(i + 1);
+    const said = i === 0 ? "the river itself" : fresh.join(" + ") || quiet || "nothing new";
+    console.log(`hole ${i + 1}: ${said}`);
+    const want = i === 0 || quiet ? 0 : 1;
+    if (fresh.length !== want) {
+      bad++;
+      console.log(`   !! introduces ${fresh.length}, wanted ${want}${fresh.length ? ` (${fresh.join(", ")})` : ""}`);
+    }
+  });
+  const missed = ELEMENTS.filter((k) => !taught.has(k));
+  if (missed.length) {
+    bad++;
+    console.log(`   !! never taught anywhere: ${missed.join(", ")}`);
+  }
+}
+
+check(HOLES, "src/holes.js — the authored course");
+checkLadder(HOLES);
+check(PLAYABLE_HOLES, "src/playable-levels.js — the skip playable", 24);
 process.exit(bad ? 1 : 0);

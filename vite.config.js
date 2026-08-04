@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
 import { resolve } from "path";
 
+import { audioLab } from "./vite.audio-lab.js";
+
 // Skippidy Skip is a plain ES-module three.js game. Vite just bundles the
 // bare imports (three, peerjs, posthog-js) that used to come from a CDN
 // importmap, and emits a static dist/ that both Vercel and the Capacitor
@@ -8,6 +10,8 @@ import { resolve } from "path";
 // under Capacitor's local WebView scheme as well as on the web.
 export default defineConfig({
   base: "./",
+  // dev only: lets the admin panel's Audio Lab regenerate cues through Scenario
+  plugins: [audioLab()],
   build: {
     target: "es2020",
     outDir: "dist",

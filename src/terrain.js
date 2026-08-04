@@ -9,6 +9,11 @@
  *   • the banks -> Perlin hills that get TALLER the further you are from water
  *   • far out (beyond the lake radius) -> the familiar radial mountain bowl
  *
+ * A hole with waterfalls in it repeats that whole arrangement once per terrace:
+ * the ground is built against the local waterline and then lifted onto its step
+ * (water.js terraceLiftAt), which turns the lip into a cliff with a bed, a
+ * beach and banks running away from it on both levels.
+ *
  * That "taller inland" rule is the difficulty knob. A narrow neck of land
  * between two legs of the channel only ever rises into a low ridge you can lob
  * over, but a fat corner grows into a wall you have to go around — so cutting
@@ -24,8 +29,9 @@
  * sand and grass, cross-faded per vertex — see GROUND_TEX.
  */
 import * as THREE from "three";
-import { LAKE_R, CHANNEL_W, BED_MAX, bedProfile } from "./water.js";
+import { LAKE_R, CHANNEL_W, BED_MAX, bedProfile, terraceLiftAt } from "./water.js";
 import { getNoise, shoreWobble } from "./channelrender.js";
+import { holeLegs, channelAt } from "./channel.js";
 import { perlin2, fbm2, ridged2 } from "./noise.js";
 
 const SAND_W = 3.5; // flat beach width at the waterline
@@ -42,15 +48,17 @@ const TEE_BACK = 23, TEE_HALF = 5.5;
 /** how close to the fairway the mountain ring is not allowed to encroach */
 const MOUNT_INSET = 34;
 
-// module state (mirrors the shader's path so JS height matches the visuals)
+// module state (mirrors the shader's channel so JS height matches the visuals)
 let _path = null;
+let _legs = []; // main line + branches, each with its own width (channel.js)
 let _halfW = CHANNEL_W;
 let _tee = null; // { x, z, ux, uz } with ux/uz pointing back down the bridge
 let _nfreq = 0.05, _namp = 7; // cached shoreline-noise so we don't hit localStorage per vertex
 
-export function setTerrainPath(path, halfWidth = CHANNEL_W) {
+export function setTerrainPath(path, halfWidth = CHANNEL_W, branches = null) {
   _path = path && path.length >= 2 ? path.map((p) => ({ x: p.x, z: p.z })) : null;
   _halfW = halfWidth;
+  _legs = _path ? holeLegs({ path: _path, branches }, halfWidth) : [];
   if (_path) {
     const tee = _path[0], next = _path[1];
     const dx = next.x - tee.x, dz = next.z - tee.z;
@@ -61,21 +69,6 @@ export function setTerrainPath(path, halfWidth = CHANNEL_W) {
   }
   const n = getNoise();
   _nfreq = n.freq; _namp = n.amp;
-}
-
-function distToPath(x, z) {
-  let d = Infinity;
-  for (let i = 0; i < _path.length - 1; i++) {
-    const a = _path[i], b = _path[i + 1];
-    const bax = b.x - a.x, baz = b.z - a.z;
-    const pax = x - a.x, paz = z - a.z;
-    const len2 = bax * bax + baz * baz || 1;
-    const h = Math.min(1, Math.max(0, (pax * bax + paz * baz) / len2));
-    const dx = pax - bax * h, dz = paz - baz * h;
-    const dd = Math.sqrt(dx * dx + dz * dz);
-    if (dd < d) d = dd;
-  }
-  return d;
 }
 
 const sstep = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0 || 1))); return t * t * (3 - 2 * t); };
@@ -98,7 +91,13 @@ function hillsAt(x, z) {
 function sample(x, z) {
   const r = Math.hypot(x, z);
   let d, edgeW;
-  if (_path) { d = distToPath(x, z); edgeW = _halfW; } else { d = r; edgeW = LAKE_R; }
+  // The ground is carved against the water that is nearest — on a hole with a
+  // shortcut in it that may be the branch, which is narrower and so digs a
+  // narrower trench through the bank (channel.js).
+  if (_legs.length) {
+    const c = channelAt(_legs, x, z);
+    d = c.d; edgeW = c.w;
+  } else { d = r; edgeW = LAKE_R; }
   const dw = d + shoreWobble(x, z, _nfreq, _namp);
 
   // How sandy the ground reads for the texture blend (see GROUND_TEX). The bed
@@ -139,18 +138,42 @@ function sample(x, z) {
       * (1 - sstep(TEE_HALF, TEE_HALF + 6, side));
     y *= 1 - 0.9 * k;
   }
-  return { y, kind, sand };
+  // Last of all, stand the whole point on its terrace (water.js falls). Every
+  // rule above is written against its own waterline, so the plateau above a
+  // waterfall gets the same beach, the same banks and the same flattened tee
+  // apron as the pool below it — just six metres further up.
+  return { y: y + terraceLiftAt(x, z), kind, sand };
 }
 
 /** ground height at a world point (mirrors the mesh) — used by physics & props */
 export function terrainHeightAt(x, z) { return sample(x, z).y; }
+
+// Islands are the one piece of ground this grid knows nothing about: they are
+// their own squashed domes dropped in mid-channel (world.js CourseMarkers), so
+// the shape lives here as numbers both the mesh and the sim are built from —
+// otherwise a stone sits on a beach the renderer put somewhere else.
+export const ISLE_SQUASH = 0.32; // how flat the dome is against its own radius
+export const ISLE_SINK = 0.1; // and how far it is pushed under its waterline
+
+/**
+ * How far an island's sand stands above its own waterline, `d` out from the
+ * middle. Negative past the shoreline (about 0.95r out), which is the shelf
+ * shelving away underwater rather than a beach you could sit on.
+ */
+export function islandRise(r, d) {
+  const k = r * r - d * d;
+  return (k > 0 ? ISLE_SQUASH * Math.sqrt(k) : 0) - r * ISLE_SINK;
+}
 /** height + biome ("bed" | "sand" | "grass") — one call instead of two */
 export function terrainSampleAt(x, z) { return sample(x, z); }
 
 // ---- colour palette ----------------------------------------------------------
-const SAND = [0.93, 0.85, 0.64];
-const MUD = [0.72, 0.66, 0.5]; // wet sand just under the waterline
-const MUD_DEEP = [0.3, 0.42, 0.42];
+// The beach and the lake bed. Not part of the elevation gradient below, because
+// they are underfoot rather than up the hill — but a biome swaps them (a shingle
+// shore under a pine forest is grey, not golden), so they are `let`.
+let SAND = [0.93, 0.85, 0.64];
+let MUD = [0.72, 0.66, 0.5]; // wet sand just under the waterline
+let MUD_DEEP = [0.3, 0.42, 0.42];
 const GRASS = [0.49, 0.77, 0.37];
 const GRASS_DARK = [0.31, 0.6, 0.29];
 const ROCK = [0.6, 0.65, 0.64];
@@ -192,6 +215,20 @@ export function getTerrainGradient() {
     hex: "#" + _tmpCol.setRGB(s.c[0], s.c[1], s.c[2], THREE.LinearSRGBColorSpace).getHexString(),
   }));
 }
+/**
+ * The beach and the bed, as hex. Takes effect on the next setPath/rebuild,
+ * which is the same pass that lays the elevation gradient down.
+ */
+export function setShoreColors({ sand, mud, mudDeep } = {}) {
+  if (sand) SAND = hexToLin(sand);
+  if (mud) MUD = hexToLin(mud);
+  if (mudDeep) MUD_DEEP = hexToLin(mudDeep);
+}
+export function getShoreColors() {
+  const hex = (c) => "#" + _tmpCol.setRGB(c[0], c[1], c[2], THREE.LinearSRGBColorSpace).getHexString();
+  return { sand: hex(SAND), mud: hex(MUD), mudDeep: hex(MUD_DEEP) };
+}
+
 export function setTerrainGradient(stops) {
   const next = stops
     .map((s) => { _tmpCol.set(s.hex); return { t: clamp01(s.t), c: [_tmpCol.r, _tmpCol.g, _tmpCol.b] }; })
@@ -383,10 +420,11 @@ export class Terrain {
   }
 
   /** rebuild the displaced mesh for a hole's channel (null => radial disc) */
-  setPath(path, halfWidth = CHANNEL_W) {
+  setPath(path, halfWidth = CHANNEL_W, branches = null) {
     this._lastPath = path;
     this._lastHalfW = halfWidth;
-    setTerrainPath(path, halfWidth);
+    this._lastBranches = branches;
+    setTerrainPath(path, halfWidth, branches);
     const pos = this.geo.attributes.position;
     const n = pos.count;
     let colAttr = this.geo.getAttribute("color");
@@ -422,6 +460,6 @@ export class Terrain {
 
   /** re-bake vertex colours/heights for the current hole (after a palette tweak) */
   rebuild() {
-    this.setPath(this._lastPath, this._lastHalfW);
+    this.setPath(this._lastPath, this._lastHalfW, this._lastBranches);
   }
 }

@@ -7,8 +7,9 @@
  * squash and spin carry them along. A hat with `userData.spinner` gets that
  * child turned every frame (the propeller earns its 400 shells).
  *
- * Floaters reskin the lifebuoy the bench and the fishing line share, so a ring
- * you buy shows up in both places.
+ * Floaters are the shapes in lifebuoy.js, which the bench and the fishing line
+ * share, so a ring you buy shows up in both places. This file only holds the
+ * catalogue and the two colours each one is painted in.
  *
  * Trails are pure particle recipes — no state, no meshes — called once a frame
  * per flying stone, in the same spot the stock wet trail used to go.
@@ -214,19 +215,19 @@ const HAT_BUILDERS = {
   },
 };
 
-/** @type {{id:string,name:string,icon:string,cost:number,blurb:string}[]} */
+/** @type {{id:string,name:string,cost:number,blurb:string}[]} */
 export const HATS = [
-  { id: "none", name: "Bare Stone", icon: "🪨", cost: 0, blurb: "Nothing on top. Classic." },
-  { id: "party", name: "Party Cone", icon: "🎉", cost: 120, blurb: "Every throw is a celebration." },
-  { id: "cap", name: "Ball Cap", icon: "🧢", cost: 150, blurb: "Worn backwards would be too much." },
-  { id: "daisy", name: "Daisy", icon: "🌼", cost: 200, blurb: "A little flower, turning gently." },
-  { id: "topper", name: "Top Hat", icon: "🎩", cost: 250, blurb: "For the distinguished skipping stone." },
-  { id: "bandana", name: "Pirate Rag", icon: "🏴‍☠️", cost: 350, blurb: "Sailed the lake. Feared by ducks." },
-  { id: "propeller", name: "Propeller Beanie", icon: "🚁", cost: 400, blurb: "It spins. It really does spin." },
-  { id: "sombrero", name: "Sombrero", icon: "🌵", cost: 500, blurb: "Shade for the long final stretch." },
-  { id: "viking", name: "Viking Helm", icon: "🪓", cost: 600, blurb: "Horns are not historically accurate." },
-  { id: "halo", name: "Halo", icon: "😇", cost: 750, blurb: "Innocent of every splash you land." },
-  { id: "crown", name: "Crown", icon: "👑", cost: 900, blurb: "Only kings of the lake need apply." },
+  { id: "none", name: "Bare Stone", cost: 0, blurb: "Nothing on top. Classic." },
+  { id: "party", name: "Party Cone", cost: 120, blurb: "Every throw is a celebration." },
+  { id: "cap", name: "Ball Cap", cost: 150, blurb: "Worn backwards would be too much." },
+  { id: "daisy", name: "Daisy", cost: 200, blurb: "A little flower, turning gently." },
+  { id: "topper", name: "Top Hat", cost: 250, blurb: "For the distinguished skipping stone." },
+  { id: "bandana", name: "Pirate Rag", cost: 350, blurb: "Sailed the lake. Feared by ducks." },
+  { id: "propeller", name: "Propeller Beanie", cost: 400, blurb: "It spins. It really does spin." },
+  { id: "sombrero", name: "Sombrero", cost: 500, blurb: "Shade for the long final stretch." },
+  { id: "viking", name: "Viking Helm", cost: 600, blurb: "Horns are not historically accurate." },
+  { id: "halo", name: "Halo", cost: 750, blurb: "Innocent of every splash you land." },
+  { id: "crown", name: "Crown", cost: 900, blurb: "Only kings of the lake need apply." },
 ];
 
 export const HAT_BY_ID = new Map(HATS.map((h) => [h.id, h]));
@@ -237,20 +238,23 @@ export function makeHat(id) {
 }
 
 // ------------------------------------------------------------------ floaters
-/** @type {{id:string,name:string,icon:string,cost:number,blurb:string,ring:number,patch:number,sprinkles?:boolean}[]} */
+// `ring` is the body colour and `patch` its trim; the shape itself is built by
+// lifebuoy.js under the same id.
+/** @type {{id:string,name:string,cost:number,blurb:string,ring:number,patch:number}[]} */
 export const FLOATERS = [
-  { id: "classic", name: "Lifebuoy", icon: "🛟", cost: 0, blurb: "The one every rock starts on.", ring: 0xff5a3c, patch: 0xf4f0e6 },
-  { id: "mint", name: "Mint Ring", icon: "🌿", cost: 120, blurb: "Cool, calm, faintly minty.", ring: 0x6fe07a, patch: 0xfdf6e3 },
-  { id: "duck", name: "Rubber Duck", icon: "🦆", cost: 180, blurb: "Bath-time yellow, lake-grade rubber.", ring: 0xffd24a, patch: 0xff8a3d },
-  { id: "donut", name: "Frosted Donut", icon: "🍩", cost: 260, blurb: "Strawberry glaze, with sprinkles.", ring: 0xff8fc0, patch: 0xf9e0a2, sprinkles: true },
-  { id: "lava", name: "Lava Ring", icon: "🌋", cost: 340, blurb: "Still warm. Don't ask.", ring: 0xe0503a, patch: 0x2a1b18 },
-  { id: "royal", name: "Royal Ring", icon: "💜", cost: 480, blurb: "Purple velvet and gold trim.", ring: 0x7d55d6, patch: 0xffd24a },
+  { id: "classic", name: "Lifebuoy", cost: 0, blurb: "The one every rock starts on.", ring: 0xff5a3c, patch: 0xf4f0e6 },
+  { id: "mint", name: "Mint Ring", cost: 120, blurb: "Cool, calm, faintly minty.", ring: 0x6fe07a, patch: 0xfdf6e3 },
+  { id: "duck", name: "Rubber Duck", cost: 180, blurb: "Bath-time yellow, lake-grade rubber.", ring: 0xffd24a, patch: 0xff8a3d },
+  { id: "donut", name: "Frosted Donut", cost: 260, blurb: "Strawberry glaze, with sprinkles.", ring: 0xff8fc0, patch: 0xf9e0a2 },
+  { id: "lava", name: "Lava Ring", cost: 340, blurb: "Still warm. Don't ask.", ring: 0xe0503a, patch: 0x2a1b18 },
+  { id: "royal", name: "Royal Ring", cost: 480, blurb: "Purple velvet and gold trim.", ring: 0x7d55d6, patch: 0xffd24a },
 ];
 
 export const FLOATER_BY_ID = new Map(FLOATERS.map((f) => [f.id, f]));
 
 /**
- * Recolour a lifebuoy in place — `buoy` is what makeLifebuoy() handed back.
+ * Dress a floater in place — `buoy` is what makeFloater() handed back. It
+ * swaps to that floater's shape and paints its two materials.
  *
  * The cel shader swaps every lit material for a toon twin (celshader.js), so
  * painting only the source leaves the ring on screen exactly as red as it was.
@@ -258,11 +262,11 @@ export const FLOATER_BY_ID = new Map(FLOATERS.map((f) => [f.id, f]));
  */
 export function paintFloater(buoy, id) {
   const spec = FLOATER_BY_ID.get(id) ?? FLOATERS[0];
+  buoy.setShape?.(spec.id);
   buoy.ringMat.color.setHex(spec.ring);
   celMat(buoy.ringMat).color.setHex(spec.ring);
   buoy.patchMat.color.setHex(spec.patch);
   celMat(buoy.patchMat).color.setHex(spec.patch);
-  if (buoy.setSprinkles) buoy.setSprinkles(!!spec.sprinkles);
   return spec;
 }
 
@@ -270,17 +274,17 @@ export function paintFloater(buoy, id) {
 const _c = new THREE.Color();
 const RAINBOW = [0xff5470, 0xff8a3d, 0xffd24a, 0x6fe07a, 0x37c8e0, 0x9d7cf4];
 
-/** @type {{id:string,name:string,icon:string,cost:number,blurb:string}[]} */
+/** @type {{id:string,name:string,cost:number,blurb:string}[]} */
 export const TRAILS = [
-  { id: "none", name: "Wet Spray", icon: "💦", cost: 0, blurb: "Just lake water, like everyone else." },
-  { id: "sparkle", name: "Sparkle", icon: "✨", cost: 150, blurb: "Leaves a glittering thread behind you." },
-  { id: "bubbles", name: "Bubbles", icon: "🫧", cost: 180, blurb: "A wobbling string of bubbles." },
-  { id: "ink", name: "Ink Cloud", icon: "🖤", cost: 220, blurb: "Squid-black smoke. Very mysterious." },
-  { id: "snow", name: "Frost", icon: "❄️", cost: 260, blurb: "Cold enough to frost the water." },
-  { id: "embers", name: "Embers", icon: "🔥", cost: 300, blurb: "Burning without the five-hop chain." },
-  { id: "hearts", name: "Lovestruck", icon: "💗", cost: 340, blurb: "The lake loves you back." },
-  { id: "rainbow", name: "Rainbow", icon: "🌈", cost: 420, blurb: "Full spectrum, every hop." },
-  { id: "bolt", name: "Live Wire", icon: "⚡", cost: 500, blurb: "Crackling arcs off a screaming stone." },
+  { id: "none", name: "Wet Spray", cost: 0, blurb: "Just lake water, like everyone else." },
+  { id: "sparkle", name: "Sparkle", cost: 150, blurb: "Leaves a glittering thread behind you." },
+  { id: "bubbles", name: "Bubbles", cost: 180, blurb: "A wobbling string of bubbles." },
+  { id: "ink", name: "Ink Cloud", cost: 220, blurb: "Squid-black smoke. Very mysterious." },
+  { id: "snow", name: "Frost", cost: 260, blurb: "Cold enough to frost the water." },
+  { id: "embers", name: "Embers", cost: 300, blurb: "Burning without the five-hop chain." },
+  { id: "hearts", name: "Lovestruck", cost: 340, blurb: "The lake loves you back." },
+  { id: "rainbow", name: "Rainbow", cost: 420, blurb: "Full spectrum, every hop." },
+  { id: "bolt", name: "Live Wire", cost: 500, blurb: "Crackling arcs off a screaming stone." },
 ];
 
 export const TRAIL_BY_ID = new Map(TRAILS.map((t) => [t.id, t]));

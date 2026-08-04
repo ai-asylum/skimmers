@@ -40,8 +40,11 @@ or tap an empty floater to go and carve another.
 | **Island stop** | land on an island and you throw from dry sand — no drowning, no fishing |
 | **Ferry** | land *in* a boat and it carries your stone across the lake |
 | **Rebound** | hit a hull side and the stone BOINGs off elastically — bank shots count toward your chain |
+| **Duck under** | bridge decks and cave roofs are lids on the fairway — a lob that hits the underside is over, and the only line through is the flat one you'd normally never risk |
+| **Time the wheel** | a mill paddle on the upswing flings your stone down the river; the same paddle a beat later swats it under |
+| **Over the edge** | a stone that clears a waterfall lip keeps everything it had, and lands metres lower still skipping |
 
-Each hole is a long river of buoys that runs the full width of the map, tee to
+Each hole is a long river that runs the full width of the map, tee to
 flag in one direction, with hard elbows and island rest stops along the way —
 follow the minimap (tap it to blow it up). Giant rock spires wall off the straight line to the flag:
 **CLONK** into one and your chain is dead (a high splash-lob can just clear
@@ -51,6 +54,35 @@ counts — put a stone *into* that water and it gets dragged under and you take
 the hole. Sail over the top of it and nothing happens. Most holes wins.
 
 ![spires guard the flag](media/course.png)
+
+Every hole in the lake steps down at least once. A waterfall is not a trick
+laid on top of the river, it is what a river does, so the surface, the bed, the
+banks and everything standing on them drop at each lip and the hole plays
+downhill in terraces. **Long Water** shows you a single three-metre step
+alongside the islands and the spires; **Stepwater** is three of them back to
+back and almost no rock, because the drops are the hole; **Cataract Run** is
+the same idea grown up, twelve metres in two.
+
+The rest of the thirteen are a ladder, and each rung adds exactly one thing the
+lake has not asked of you yet. **Bridgeworks** is three crossings, ending on a
+trestle whose gaps are barely wider than a stone. **Millrace** strings three
+undershot mill wheels down a narrow stream, each
+on the opposite bank to the last. **The Undertow** runs dead straight into
+twenty-two metres of tunnel with two pillars in the dark. **The Race** is the
+first hole where the water moves, **The Chute** where some of it moves faster,
+**The Slack** where the reeds hold on to you. **Deadfall** drops trees across
+the river so the only headroom is against one bank; **The Lodge** walls it off
+with beaver dams that are waterfalls in their own right; **Cold Snap** freezes
+it so nothing skips and nothing sinks; and **The Split** finally offers you two
+ways down and makes you pick one.
+
+Cups walk that ladder two rungs at a time and close with an earlier hole
+mirrored, reversed or narrowed, so twenty-one tracks come out of thirteen holes
+without a cup ever repeating a lesson. A reversed hole re-cuts its own terraces
+from its new tee, so it still runs downhill. `npm test` enforces both the
+one-new-thing rule and the drop on every hole as build gates.
+
+![the river steps down a waterfall](media/falls.png)
 
 ## The juicy bits
 
@@ -79,6 +111,16 @@ npm run dev
 
 No build step. Plain ES modules; three.js comes from a CDN importmap.
 
+Served locally, `` ` `` opens the debug menu
+([`src/tweakmenu.js`](src/tweakmenu.js)). **Levels** opens every cup and class in
+one click and then jumps the live race to any hole in any of them, which is how
+you get eyes on a waterfall without playing four cups to earn it. **Biome** puts
+any of the weathers on the hole that's up. The scene colour, gradient and water
+controls are folded away underneath it; they write into the live materials and
+persist to localStorage, and the Share panel exports the lot as JSON — though a
+hole change reapplies its biome over the top of them. None of it ships — the
+menu is only wired up on localhost.
+
 ## Architecture notes
 
 - [`src/physics.js`](src/physics.js) — the skip sim: water-entry angle +
@@ -86,7 +128,15 @@ No build step. Plain ES modules; three.js comes from a CDN importmap.
   the identical step for the aim preview and the bot planner, so neither lies.
 - [`src/bots.js`](src/bots.js) — 7 CPU personas play through the *same*
   `Skimmer` physics as you, navigating the fairway waypoint by waypoint with
-  skill-scaled wobble.
+  skill-scaled wobble. Their *pace* is on a rubber band measured along the buoy
+  line: a rival that runs away from the field takes longer over every throw and
+  every fishing break and lets its aim drift, so the hole stays live instead of
+  being decided in the first thirty seconds. The band only ever brakes — a rival
+  that's been dropped is left dropped, and no stone is ever handed a truer line
+  than its persona earns — until the last person is home, when the stragglers
+  get a hurry-up so the final stretch isn't spent watching stones you've already
+  beaten. `npm test` races it against a scripted human to prove it never costs
+  the player a place.
 - [`src/rock.js`](src/rock.js) — procedural stones: a drillable voxel field
   meshed by marching cubes, packed tighter (and darker, and slower to cut) the
   closer to its middle you get. A bite that would snap the stone in two is
@@ -114,8 +164,54 @@ No build step. Plain ES modules; three.js comes from a CDN importmap.
   `node scripts/measure-eyes.mjs`, drag the sockets by hand in the Eyes Lab at
   `/admin` (edits save live to any open game tab), and eyeball every face at
   once at `/eyecheck.html`.
+- [`src/props.js`](src/props.js) — the hole furniture: waterfall curtains, mill
+  wheels, bridges and caves. It is split by what the aim preview can
+  honestly promise. Anything that stands still hands itself to the sim as an
+  ordinary outcrop or a ceiling, so it CLONKs, shows in the dotted line and the
+  bots route around it; anything that *moves* is deliberately invisible to the
+  preview, because a mill paddle's whole value is that you have to time it.
+- [`src/water.js`](src/water.js) — the lake, and the falls that make it stop
+  being flat. A lip is a half-plane: everything upstream of it — surface, bed,
+  banks, props, particles, the fishing minigame — rides one drop higher, which
+  is why `waterLevelAt(x, z)` rather than a constant is the only honest way to
+  ask where the water is.
+- [`src/biomes.js`](src/biomes.js) — the same lake in a different country. Sky,
+  fog, sun, lights, bank gradient, beach, water bands, tree species mix and
+  undergrowth wash are authored as one bundle per biome and applied in a single
+  call at the top of `setupHole`, because a look only works if every layer of it
+  is from the same afternoon. Each cup wears one, which is most of what stops
+  the transformed track at the back of each cup from reading as the hole you
+  played a cup ago; a hole can overrule its cup when it has to, which is how a
+  sheet of ice avoids turning up in high summer.
+- [`src/holes.js`](src/holes.js) — the thirteen holes, in teaching order. Every
+  one introduces exactly one element no hole before it had and may keep any of
+  the ones already taught, which is a rule worth enforcing rather than
+  intending: a hole that brings two new things at once teaches neither, and a
+  hole that brings none is a hole you have already played. `npm test` counts the
+  rungs and fails the build on both.
+- [`src/holerules.js`](src/holerules.js) — what makes an authored hole a legal
+  hole: straightness, leg length, furniture on the line and clear of each other,
+  a waterfall crossed exactly once and downhill. `npm test` fails the build on
+  them ([`scripts/checkholes.mjs`](scripts/checkholes.mjs)) and the level editor
+  at `/admin` runs the identical rules as you drag, so a dam shoved into the
+  bank complains while your finger is still on it. The editor places every kind
+  of furniture now, not just the fairway.
+- [`src/channel.js`](src/channel.js) and [`src/route.js`](src/route.js) — a hole
+  need not be one river. A hole may carry `branches`: a narrower channel that
+  leaves the main line and rejoins it further down, cutting a corner off at the
+  price of having less water to miss with. `channel.js` reduces the whole hole
+  to a list of legs with a width each, and every part that asks *where is the
+  water* — the surface shader, the carve of the ground, the minimap raster, the
+  rules — answers from that one list, so the two lines cannot disagree about
+  where their banks are. `route.js` is the other half: with two ways down, "how
+  far to the flag" is no longer a walk along one polyline, so it keeps a little
+  graph and answers by shortest remaining distance. That is what ranks the field
+  on a timeout and what lets a rival read a fork at all — nerve takes the gut,
+  caution stays out on the river.
 - [`src/minimap.js`](src/minimap.js) — course baked once per hole, live blips
-  stamped on top.
+  stamped on top, in the biome's own colours. Both lines of a fork are drawn,
+  the shortcut dashed; on the water itself only the main line is buoyed, so the
+  shortcut is something you have to see for yourself.
 - Reused team scraps: Spellbook's juice kit (hitstop/shake/springs), Train
   Slop's cel shader + inverted-hull outlines + procedural-audio pattern,
   Frankentoys' brush-paint splat, plus pooled-particle, journey-spline,

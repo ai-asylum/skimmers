@@ -12,9 +12,12 @@
     "build:playable:craft": "node scripts/build-playable-craft.mjs",
     "bake:fish": "node scripts/bake-fish.mjs",
     "bake:nature": "node scripts/bake-nature.mjs",
+    "art:upgrades": "node scripts/gen-upgrade-art.mjs",
+    "art:audio": "node scripts/gen-audio.mjs",
     "preview": "vite preview --port 8741",
-    "test": "node scripts/mc-selftest.mjs && node scripts/rock-selftest.mjs && node scripts/check-career.mjs",
-    "start": "vite"
+    "test": "node scripts/mc-selftest.mjs && node scripts/rock-selftest.mjs && node scripts/checkholes.mjs && node scripts/checkthrow.mjs && node scripts/check-career.mjs && node scripts/check-biomes.mjs && node scripts/check-icons.mjs && node scripts/check-cb.mjs && node scripts/bots-selftest.mjs",
+    "start": "vite",
+    "cb:sync": "node scripts/sync-cb.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.2",

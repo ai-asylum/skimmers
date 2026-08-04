@@ -17,7 +17,7 @@
  * get ferried).
  */
 import * as THREE from "three";
-import { LAKE_R, WATER_Y } from "./water.js";
+import { LAKE_R, WATER_Y, waterLevelAt, fallSide } from "./water.js";
 import { BOAT_MODELS, POS_SCALE } from "./boatdata.js";
 
 // How far above a deck the boat still counts as solid: the paddler, the
@@ -270,6 +270,7 @@ class Boat {
     this.speed = speed;
     this.len = this.curve.getLength();
     this.t = phase;
+    this.afloat = true; // cleared on a hole whose terraces this loop cannot keep to
     this.strokePhase = Math.random() * Math.PI * 2;
     this._dipSide = 0;
     this._wakeT = 0;
@@ -283,7 +284,9 @@ class Boat {
     const u = Math.min(0.999999, Math.max(0, this.t / this.len));
     const p = this.curve.getPointAt(u);
     const tan = this.curve.getTangentAt(u);
-    this.group.position.set(p.x, WATER_Y + water.heightAt(p.x, p.z, elapsed) * 1.2, p.z);
+    // float on this point's own shelf, not on the bottom one: a hole that steps
+    // down has more than one waterline and the boat is only allowed on one
+    this.group.position.set(p.x, WATER_Y + waterLevelAt(p.x, p.z) + water.heightAt(p.x, p.z, elapsed) * 1.2, p.z);
     this.group.rotation.y = Math.atan2(-tan.z, tan.x);
     this.group.rotation.z = Math.sin(elapsed * 1.3 + this.strokePhase) * 0.04;
 
@@ -316,6 +319,29 @@ class Boat {
         particles.smoke(this.group.localToWorld(this.funnel.clone()));
       }
     }
+  }
+
+  /**
+   * Does this loop keep to a single terrace? A lip is a straight edge across
+   * the whole map (water.js fallSide), so the question is only which side of
+   * each of them the loop is on, and sampling the spline answers it. The boat
+   * needs its own half-length of clearance or it moors with its bow hanging
+   * over the drop.
+   */
+  staysOnOneShelf(falls) {
+    const SAMPLES = 48;
+    const clear = this.halfLen + 1;
+    for (const f of falls ?? []) {
+      let above = 0, below = 0;
+      for (let i = 0; i < SAMPLES; i++) {
+        const p = this.curve.getPointAt(i / SAMPLES);
+        const s = fallSide(f, p.x, p.z);
+        if (s <= -clear) above++;
+        else if (s >= clear) below++;
+      }
+      if (above !== SAMPLES && below !== SAMPLES) return false;
+    }
+    return true;
   }
 
   /**
@@ -481,17 +507,50 @@ export class Boats {
     this.boats.push(new Boat(scene, "trawler", mk(6, LAKE_R * 0.42, -12, -14), 1.5, 20));
     this.boats.push(new Boat(scene, "outboard", mk(8, LAKE_R * 0.62, 10, -4), 3.9, 45));
     this.boats.push(new Boat(scene, "row", mk(6, LAKE_R * 0.5, -6, 18), 2.8, 60));
+    this.active = true;
+  }
+
+  /**
+   * The fleet sails lake-wide loops that know nothing about the hole laid over
+   * them, so it sits out any hole carrying furniture it would motor straight
+   * through — a bridge pier, a mill wheel, a cave mouth.
+   */
+  setActive(on) {
+    this.active = on;
+    this._show();
+  }
+
+  /**
+   * A boat cannot climb a waterfall, and every hole in the lake steps down at
+   * least once (src/holes.js), so benching the fleet for a terrace would bench
+   * it for good. Each boat is asked instead whether its own loop keeps to one
+   * shelf: those that do carry on sailing at that shelf's waterline, and any
+   * whose circuit crosses a lip ties up until the next hole. Pass the resolved
+   * lips (water.getWaterFalls), which know which way downstream is.
+   */
+  setFalls(falls) {
+    for (const b of this.boats) b.afloat = b.staysOnOneShelf(falls);
+    this._show();
+  }
+
+  _show() {
+    for (const b of this.boats) b.group.visible = this.active && b.afloat;
+  }
+
+  /** the boats actually sailing this hole */
+  sailing() {
+    return this.active ? this.boats.filter((b) => b.afloat) : [];
   }
 
   update(dt, elapsed, water, particles) {
-    for (const b of this.boats) b.update(dt, elapsed, water, particles);
+    for (const b of this.sailing()) b.update(dt, elapsed, water, particles);
   }
 
   collide(pos, vel, radius, prevPos = null) {
     // decks win over hulls: a stone dropping onto one boat's deck shouldn't be
     // stolen by a hull graze on another
     let hull = null;
-    for (const b of this.boats) {
+    for (const b of this.sailing()) {
       const hit = b.collideLocal(pos, vel, radius, prevPos);
       if (hit?.type === "deck") return hit;
       if (hit && !hull) hull = hit;

@@ -3,9 +3,12 @@
  *
  * Used by both the admin level editor and the in-game minimap so they show the
  * same organic, noise-broken water edge with a sandy beach at the waterline —
- * matching the look of the 3D water shader (src/water.js). Everything is keyed
- * off distance-to-path (an SDF) plus fractal value noise on the edge.
+ * matching the look of the 3D water shader (src/water.js). The shape itself is
+ * channel.js's, so a hole that forks draws both its lines at their own widths;
+ * everything else here is that SDF plus fractal value noise on the edge.
  */
+
+import { holeLegs, channelAt } from "./channel.js";
 
 // ---- shoreline-noise config (shared by the shader, editor & minimap) ---------
 // Tweak these in the admin Level Editor; they persist in localStorage so the
@@ -45,21 +48,6 @@ export function shoreWobble(x, z, freq, amp) {
     + (fbm(x * freq * 3.6, z * freq * 3.6) - 0.5) * amp * 0.34;
 }
 
-function distToPath(x, z, path) {
-  let d = Infinity;
-  for (let i = 0; i < path.length - 1; i++) {
-    const a = path[i], b = path[i + 1];
-    const bax = b.x - a.x, baz = b.z - a.z;
-    const pax = x - a.x, paz = z - a.z;
-    const len2 = bax * bax + baz * baz || 1;
-    const h = Math.min(1, Math.max(0, (pax * bax + paz * baz) / len2));
-    const dx = pax - bax * h, dz = paz - baz * h;
-    const dd = Math.sqrt(dx * dx + dz * dz);
-    if (dd < d) d = dd;
-  }
-  return d;
-}
-
 const COL = {
   deep: [18, 85, 127], shallow: [47, 191, 211], foam: [234, 252, 255], sand: [233, 214, 156],
   rock: [150, 158, 160],
@@ -82,7 +70,7 @@ const sstep = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 
  * coarse grid and interpolated — per-pixel it would cost more than the rest of
  * the bake put together. `lobClear` is the height where green turns to rock.
  */
-export function makeChannelCanvas({ res = 220, pxToWorld, path, width, grass = "#7cc45e", sandBand = 4, noiseFreq, noiseAmp, heightAt = null, lobClear = 8 }) {
+export function makeChannelCanvas({ res = 220, pxToWorld, path, width, branches = null, grass = "#7cc45e", sandBand = 4, noiseFreq, noiseAmp, heightAt = null, lobClear = 8 }) {
   const cv = document.createElement("canvas");
   cv.width = cv.height = res;
   const ctx = cv.getContext("2d");
@@ -90,7 +78,9 @@ export function makeChannelCanvas({ res = 220, pxToWorld, path, width, grass = "
   const data = img.data;
   const grassRgb = hexRgb(grass);
   const grassDark = mix3(grassRgb, [40, 90, 50], 0.35);
-  const W = width;
+  // The channel is legs, so a hole that forks draws as both lines at their own
+  // widths — the map has to show the shortcut, or it isn't a choice.
+  const legs = path && path.length >= 2 ? holeLegs({ path, branches }, width) : [];
   const cfg = getNoise();
   const f = noiseFreq ?? cfg.freq, a = noiseAmp ?? cfg.amp;
 
@@ -117,7 +107,9 @@ export function makeChannelCanvas({ res = 220, pxToWorld, path, width, grass = "
   for (let py = 0; py < res; py++) {
     for (let px = 0; px < res; px++) {
       const { x, z } = pxToWorld((px + 0.5) / res, (py + 0.5) / res);
-      const d = path && path.length >= 2 ? distToPath(x, z, path) : Math.hypot(x, z);
+      let d, W;
+      if (legs.length) { const c = channelAt(legs, x, z); d = c.d; W = c.w; }
+      else { d = Math.hypot(x, z); W = width; }
       // fractal edge wobble to break the machined offset
       const wob = (fbm(x * f, z * f) - 0.5) * a + (fbm(x * f * 3.6, z * f * 3.6) - 0.5) * a * 0.34;
       const dw = d + wob;

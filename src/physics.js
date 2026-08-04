@@ -13,12 +13,18 @@
  *
  * The hole is a whirlpool, and taking it is a water-contact test (_checkFlag):
  * the stone has to touch down inside the rim. Flying over the top never counts.
+ *
+ * "The water" is not one height. A hole with waterfalls in it is a staircase of
+ * pools (water.js waterLevelAt), and every surface test here asks the lake how
+ * high it is *under this stone* — which is all it takes for a throw that clears
+ * a lip to run out of water beneath itself and keep going down.
  */
 import * as THREE from "three";
 import {
-  WATER_Y, lakeDepthAt, sunkRestY, isWaterAt, vortexSurfaceY,
+  lakeDepthAt, sunkRestY, isWaterAt, vortexSurfaceY, waterLevelAt,
+  currentAt, iceAt, weedAt,
 } from "./water.js";
-import { terrainHeightAt } from "./terrain.js";
+import { terrainHeightAt, islandRise } from "./terrain.js";
 import { DEFAULT_MODS } from "./upgrades.js";
 
 export const GRAVITY = 14;
@@ -62,8 +68,22 @@ const WHIRL_ORBIT_R = 0.8;
 const WHIRL_STONE_R = 0.8; // how far out along the wall the stone's edge sits
 const WHIRL_SINK = 0.3;
 
+// Ice. A frozen stretch is a lid on the fairway: there is nothing to skip off
+// and nothing to sink into, so a stone that arrives lies down and *runs*. It is
+// the one throw where a steep arrival is not a disaster — the sheet takes the
+// drop — and the one place a spent stone keeps making ground.
+const ICE_DRAG = 0.36; // per second, and that is all that ever stops it
+const ICE_STOP = 1.1; // below this it has come to rest on the sheet
+export const ICE_COVER = 0.5; // zone strength at which the lid is solid enough
+
+// Weed. Reeds will not let a stone under and will not let it get far: a bed is
+// a soft place to come down and a bad place to be going through.
+const WEED_BITE = 0.3; // zone strength at which the going turns soft
+const WEED_DRAG = 0.5; // how much of a skip's pace a full bed eats
+
 const _tmp = new THREE.Vector3();
 const _prev = new THREE.Vector3(); // position at the top of this frame's flight step
+const _flow = [0, 0]; // scratch for currentAt, which runs per racer per frame
 
 /** cylinder test against a hole's big rock outcrops */
 function hitOutcrop(pos, rocks) {
@@ -73,6 +93,54 @@ function hitOutcrop(pos, rocks) {
     if (d < o.r && pos.y < o.h) {
       return { o, nx: dx / (d || 1), nz: dz / (d || 1) };
     }
+  }
+  return null;
+}
+
+/**
+ * The island (x,z) is over, if any. Islands are the one bit of dry land the
+ * terrain grid knows nothing about — they are their own meshes mid-channel, so
+ * isWaterAt still reads open water over them and everything that has to stop on
+ * one has to ask here.
+ */
+function islandAt(x, z, islands, rMul) {
+  for (const isl of islands) {
+    if (Math.hypot(x - isl.x, z - isl.z) < isl.r * rMul) return isl;
+  }
+  return null;
+}
+
+/** the height of one island's sand at (x,z) — below its waterline off the shore */
+function islandTopY(isl, x, z) {
+  return (isl.y ?? 0) + islandRise(isl.r, Math.hypot(x - isl.x, z - isl.z));
+}
+
+/**
+ * The ground under a stone that has run out of water: the bank the terrain grid
+ * knows about or an island's dome, whichever is higher, and never below the
+ * waterline — one aground in the shallows sits in the shallows rather than on
+ * the bed a metre under them. Every stone that comes to rest on land is put
+ * down on this, so it sits on the beach it looks like it is sitting on.
+ */
+function landY(x, z, islands) {
+  const y = Math.max(terrainHeightAt(x, z), waterLevelAt(x, z));
+  const isl = islands && islandAt(x, z, islands, 1); // its own footprint, not the catchment
+  return isl ? Math.max(y, islandTopY(isl, x, z)) : y;
+}
+
+/**
+ * Bridge decks and cave roofs (props.js): an oriented slab the stone has to go
+ * under. Three outcomes — clear (below it, or off to the side), "smack" (into
+ * the underside or the edge of it), and "top" (came down on the deck, which is
+ * dry land you can throw from, same as an island).
+ */
+function hitCeiling(pos, prevY, ceilings) {
+  for (const c of ceilings) {
+    const px = pos.x - c.x, pz = pos.z - c.z;
+    if (Math.abs(px * c.ux + pz * c.uz) > c.half) continue;
+    if (Math.abs(px * c.uz - pz * c.ux) > c.span) continue;
+    if (pos.y <= c.y || pos.y >= c.top) continue;
+    return { c, where: prevY >= c.top ? "top" : "smack" };
   }
   return null;
 }
@@ -108,7 +176,7 @@ export class Skimmer {
 
     this.pos = new THREE.Vector3();
     this.vel = new THREE.Vector3();
-    this.state = "resting"; // resting | flying | sinking | fishing | beached | onboat | whirl
+    this.state = "resting"; // resting | flying | sliding | sinking | fishing | beached | onboat | whirl
     this.skips = 0; // hops in the current throw
     this.bestCombo = 0;
     this.throws = 0; // this hole
@@ -156,8 +224,21 @@ export class Skimmer {
   // it's off-limits to rival splash knocks (no getting blasted before you play)
   get onStartBridge() { return this.state === "resting" && this.throws === 0; }
 
+  /**
+   * Floating on the water itself, rather than stood on something that happens to
+   * be over it — the tee pontoon, an ice lid, a boat deck, a beach. This is the
+   * lie the current has hold of, and the lie the player's float sits under
+   * (main.js syncFloat). Riding in the float is still floating: the donut drifts
+   * downstream with everything else on the surface.
+   */
+  get afloat() {
+    return this.state === "resting" && !this.onStartBridge
+      && iceAt(this.pos.x, this.pos.z) < ICE_COVER
+      && isWaterAt(this.pos.x, this.pos.z);
+  }
+
   placeAt(x, z) {
-    this.pos.set(x, WATER_Y + 0.1, z);
+    this.pos.set(x, waterLevelAt(x, z) + 0.1, z);
     this.vel.set(0, 0, 0);
     this.state = "resting";
     this.restY = 0.06;
@@ -194,7 +275,8 @@ export class Skimmer {
       * (mode === "skip" ? 1 : 0.68) * this.mods.speedMul;
     const cosE = Math.cos(e), sinE = Math.sin(e);
     this.vel.set(dirXZ.x * cosE * speed, sinE * speed, dirXZ.z * cosE * speed);
-    this.pos.y = Math.max(this.pos.y, WATER_Y + 0.5); // buoy/bridge lies launch from their height
+    // buoy/bridge lies launch from their own height, and so does a terrace
+    this.pos.y = Math.max(this.pos.y, waterLevelAt(this.pos.x, this.pos.z) + 0.5);
     this.restY = 0.06;
     this.state = "flying";
     this.skips = 0;
@@ -249,6 +331,30 @@ export class Skimmer {
           }
         }
 
+        // bridge decks and cave roofs: the shot that has to stay low
+        if (ctx.ceilings?.length) {
+          const roof = hitCeiling(this.pos, _prev.y, ctx.ceilings);
+          if (roof?.where === "top") {
+            // came down on top of it — dry timber, and a throw from up there
+            this.pos.y = roof.c.top + 0.14;
+            this.vel.set(0, 0, 0);
+            this.state = "beached";
+            this.rock.squashKick?.(0.7);
+            this._emit("island", { at: this.pos.clone(), deck: true });
+            break;
+          }
+          if (roof) {
+            this.pos.y = roof.c.y - 0.14;
+            this.vel.y = Math.min(this.vel.y, 0) - 2.2;
+            this.vel.x *= 0.5;
+            this.vel.z *= 0.5;
+            this.skips = Math.max(this.skips, 1); // a lob into the underside is over
+            this.rock.kickEyes(2.2);
+            this.rock.squashKick?.(1.2);
+            this._emit("bonk", { at: this.pos.clone(), kind: roof.c.kind });
+          }
+        }
+
         // killcam tape
         this.tape.push({ x: this.pos.x, y: this.pos.y, z: this.pos.z, ry: this.mesh.rotation.y });
         if (this.tape.length > 160) {
@@ -287,6 +393,42 @@ export class Skimmer {
           }
         }
 
+        // mill wheels — the moving furniture (props.js). Same deal as the
+        // boats: only the real sim sees these, because no dotted line can
+        // honestly promise where a blade will be when the stone arrives.
+        if (ctx.props) {
+          const hit = ctx.props.collide(this.pos, this.vel, 0.42);
+          if (hit?.type === "paddle") {
+            // A blade on its way down swats the stone under; one sweeping
+            // through the bottom of its arc throws it down the fairway.
+            const alongV = this.vel.x * hit.ux + this.vel.z * hit.uz;
+            const sideV = this.vel.x * hit.sx + this.vel.z * hit.sz;
+            const drive = hit.vAlong;
+            const flung = drive > 3 && hit.vUp > -1.5;
+            const nextAlong = flung
+              ? Math.max(alongV * 0.5, drive * 1.5)
+              : Math.min(alongV * 0.3, drive);
+            this.vel.x = nextAlong * hit.ux + sideV * 0.55 * hit.sx;
+            this.vel.z = nextAlong * hit.uz + sideV * 0.55 * hit.sz;
+            this.vel.y = hit.vUp * 1.1 + (flung ? 2.2 : -1.6);
+            // shove clear along the spoke so we don't hit the same blade twice
+            this.pos.x += hit.nx * 0.6 * hit.ux;
+            this.pos.z += hit.nx * 0.6 * hit.uz;
+            this.pos.y += hit.ny * 0.6;
+            if (flung) {
+              this.skips++;
+              this.bestCombo = Math.max(this.bestCombo, this.skips);
+              this.tapeSkips.push(this.tape.length - 1);
+            } else {
+              this.skips = Math.max(this.skips, 1);
+            }
+            this.spin += 10;
+            this.rock.kickEyes(2.4);
+            this.rock.squashKick?.(1.3);
+            this._emit("paddle", { at: this.pos.clone(), flung, n: this.skips });
+          }
+        }
+
         // clipping a duck sends it flying and gives the stone a comic speed burst
         if (ctx.hitDuck && this.vel.lengthSq() > 9) {
           const at = ctx.hitDuck(this.pos, this.vel);
@@ -316,37 +458,53 @@ export class Skimmer {
           }
         }
 
-        // island rest stop — dry land mid-lake, no fishing required
+        // Island rest stop — dry land mid-lake, no fishing required. The
+        // catchment is a pad over the waterline, as it always was; the mound
+        // only raises it where the sand genuinely stands higher, so a stone
+        // cannot skim through the middle of a hill. It comes to rest on the
+        // dome rather than at a flat height over it.
         if (ctx.islands) {
-          let landed = false;
-          for (const isl of ctx.islands) {
-            const d = Math.hypot(this.pos.x - isl.x, this.pos.z - isl.z);
-            if (d < isl.r * this.mods.islandR && this.pos.y <= 0.55 && this.vel.y < 0) {
-              this.pos.y = 0.45;
-              this.vel.set(0, 0, 0);
-              this.state = "beached";
-              this.rock.squashKick?.(0.9);
-              this._emit("island", { at: this.pos.clone() });
-              landed = true;
-              break;
-            }
+          const isl = islandAt(this.pos.x, this.pos.z, ctx.islands, this.mods.islandR);
+          const sand = isl ? Math.max(islandTopY(isl, this.pos.x, this.pos.z), isl.y ?? 0) : 0;
+          if (isl && this.pos.y <= Math.max((isl.y ?? 0) + 0.55, sand) && this.vel.y < 0) {
+            this.pos.y = sand + 0.12;
+            this.vel.set(0, 0, 0);
+            this.state = "beached";
+            this.rock.squashKick?.(0.9);
+            this._emit("island", { at: this.pos.clone() });
+            break;
           }
-          if (landed) break;
         }
 
-        // contact test — you can only skip on the water channel. Over the
-        // sand/grass banks the stone just thuds down and beaches (no skipping).
-        if (isWaterAt(this.pos.x, this.pos.z)) {
-          const waterY = WATER_Y + water.heightAt(this.pos.x, this.pos.z, elapsed);
+        // Crossing a lip is the one moment the ground drops out from under a
+        // stone that hasn't touched anything, so it is worth announcing: the
+        // hop it was in the middle of is suddenly a long way from landing.
+        {
+          const lvl = waterLevelAt(this.pos.x, this.pos.z);
+          if (lvl < waterLevelAt(_prev.x, _prev.z)) {
+            this._emit("plunge", { at: this.pos.clone(), drop: waterLevelAt(_prev.x, _prev.z) - lvl });
+          }
+        }
+
+        // Contact test — you can only skip on the water channel. Over the
+        // sand/grass banks the stone just thuds down and beaches (no skipping),
+        // and the rim of an island counts as bank: the channel calls its sand
+        // open water, so without this a stone glugs into a visible beach.
+        const groundY = landY(this.pos.x, this.pos.z, ctx.islands);
+        if (isWaterAt(this.pos.x, this.pos.z) && groundY <= waterLevelAt(this.pos.x, this.pos.z)) {
+          // ...whichever terrace of it you are over: below a waterfall's lip
+          // the surface is metres lower, so a stone that clears the lip simply
+          // runs out of water under itself and keeps falling
+          const waterY = waterLevelAt(this.pos.x, this.pos.z)
+            + water.heightAt(this.pos.x, this.pos.z, elapsed);
           if (this.pos.y <= waterY + rockH && this.vel.y < 0) {
             this._waterContact(ctx, waterY);
           }
         } else {
           // Dropping onto the bank beaches you; so does driving into a slope on
           // the way up, or a climbing stone would tunnel clean through a hill.
-          const groundY = terrainHeightAt(this.pos.x, this.pos.z);
           if (this.pos.y <= groundY + (this.vel.y < 0 ? rockH : 0)) {
-            this.pos.y = Math.max(groundY + 0.12, WATER_Y + 0.05);
+            this.pos.y = groundY + 0.12;
             this.vel.set(0, 0, 0);
             this.state = "beached";
             this.rock.squashKick?.(0.5);
@@ -391,9 +549,101 @@ export class Skimmer {
       }
 
       case "resting": {
+        // A stone that has stopped is still sitting on moving water. On a hole
+        // with a current this is the second half of the throw: where you parked
+        // decides whether the river walks you down to the flag, tucks you into
+        // an eddy, pins you on the outside of a bend — or tips you over a lip.
+        if (!this.finished && this.afloat) {
+          currentAt(this.pos.x, this.pos.z, _flow);
+          if (_flow[0] || _flow[1]) {
+            const nx = this.pos.x + _flow[0] * dt;
+            const nz = this.pos.z + _flow[1] * dt;
+            const was = waterLevelAt(this.pos.x, this.pos.z);
+            const now = waterLevelAt(nx, nz);
+            if (now < was) {
+              // over the edge, and it did not even get a say in it
+              this.pos.x = nx; this.pos.z = nz;
+              this.vel.set(_flow[0], 0, _flow[1]);
+              this.state = "flying";
+              this._emit("plunge", { at: this.pos.clone(), drop: was - now, drifted: true });
+              break;
+            }
+            // Anything standing in the water parks it: the stone rides up
+            // against the upstream face and stays there, which is a place worth
+            // knowing. An island counts — the channel calls its sand open
+            // water, so without asking, the drift walks the stone through it.
+            const blocked = (ctx.rocks && hitOutcrop(_tmp.set(nx, this.pos.y, nz), ctx.rocks))
+              || (ctx.islands && islandAt(nx, nz, ctx.islands, this.mods.islandR));
+            if (blocked) {
+              // A spire is a wall to lean on, but an island shelves: if there is
+              // sand under the stone where the river left it, it has run aground
+              // rather than parked, and it sits on that sand.
+              const g = landY(this.pos.x, this.pos.z, ctx.islands);
+              if (g > waterLevelAt(this.pos.x, this.pos.z)) {
+                this.pos.y = g + 0.12;
+                this.state = "beached";
+                this._emit("beach", { at: this.pos.clone(), drifted: true });
+                break;
+              }
+            } else if (isWaterAt(nx, nz)) {
+              this.pos.x = nx; this.pos.z = nz;
+              this._checkFlag(ctx, true); // drifting in still counts as arriving
+            } else {
+              // washed up on the outside of the bend, sat down on the ground it
+              // grounded on rather than left hanging over the waterline
+              this.pos.x = nx; this.pos.z = nz;
+              this.pos.y = landY(nx, nz, ctx.islands) + 0.12;
+              this.state = "beached";
+              this._emit("beach", { at: this.pos.clone(), drifted: true });
+              break;
+            }
+          }
+        }
         // bob on the waves (restY lifts this onto the buoy / tee bridge)
-        const wy = WATER_Y + water.heightAt(this.pos.x, this.pos.z, elapsed);
+        const wy = waterLevelAt(this.pos.x, this.pos.z)
+          + water.heightAt(this.pos.x, this.pos.z, elapsed);
         this.pos.y = wy + this.restY + Math.sin(elapsed * 2 + this.bobPhase) * 0.02;
+        break;
+      }
+
+      case "sliding": {
+        // Curling. No gravity worth the name, no hops, no water to go under:
+        // the stone keeps its line and bleeds speed to the sheet until it runs
+        // out, runs off the edge, or finds a rock.
+        this.pos.x += this.vel.x * dt;
+        this.pos.z += this.vel.z * dt;
+        const drag = Math.max(0, 1 - ICE_DRAG * dt);
+        this.vel.x *= drag; this.vel.z *= drag;
+        this.pos.y = waterLevelAt(this.pos.x, this.pos.z) + 0.12;
+        if (ctx.rocks) {
+          const hit = hitOutcrop(this.pos, ctx.rocks);
+          if (hit) {
+            const { o, nx, nz } = hit;
+            this.pos.x = o.x + nx * o.r;
+            this.pos.z = o.z + nz * o.r;
+            const dot = this.vel.x * nx + this.vel.z * nz;
+            if (dot < 0) { this.vel.x -= 2 * dot * nx; this.vel.z -= 2 * dot * nz; }
+            this.vel.x *= 0.62; this.vel.z *= 0.62;
+            this.rock.kickEyes(2);
+            this._emit("clonk", { at: this.pos.clone(), bounced: true, onIce: true });
+          }
+        }
+        this._checkFlag(ctx, true);
+        if (this.finished) break;
+        if (iceAt(this.pos.x, this.pos.z) < ICE_COVER) {
+          // off the end of the sheet and back onto open water, still travelling:
+          // let the ordinary contact test decide what that arrival is worth
+          this.state = "flying";
+          this.vel.y = -0.5;
+          this._emit("thaw", { at: this.pos.clone(), speed: Math.hypot(this.vel.x, this.vel.z) });
+          break;
+        }
+        if (Math.hypot(this.vel.x, this.vel.z) < ICE_STOP) {
+          this.vel.set(0, 0, 0);
+          this.state = "resting";
+          this.restY = 0.12;
+          this._emit("settle", { at: this.pos.clone(), onIce: true });
+        }
         break;
       }
 
@@ -407,7 +657,7 @@ export class Skimmer {
         this.pos.x = w.cx + Math.cos(w.a) * w.r;
         this.pos.z = w.cz + Math.sin(w.a) * w.r;
         if (w.r <= WHIRL_ORBIT_R + 0.01) w.sink = Math.min(WHIRL_SINK, w.sink + dt * 0.8);
-        this.pos.y = WATER_Y + vortexSurfaceY(w.r + WHIRL_STONE_R) + 0.1 - w.sink
+        this.pos.y = waterLevelAt(w.cx, w.cz) + vortexSurfaceY(w.r + WHIRL_STONE_R) + 0.1 - w.sink
                    + Math.sin(elapsed * 2.6 + this.bobPhase) * 0.05;
         break;
       }
@@ -422,6 +672,11 @@ export class Skimmer {
     if (this.state === "flying") {
       m.rotation.y -= this.spin * dt;
       m.rotation.z = THREE.MathUtils.lerp(m.rotation.z, -0.12, 0.1);
+    } else if (this.state === "sliding") {
+      // flat on the sheet and still turning: a curling stone, not a skipping one
+      m.rotation.y -= this.spin * dt * 0.5;
+      m.rotation.x = THREE.MathUtils.lerp(m.rotation.x, 0, 8 * dt);
+      m.rotation.z = THREE.MathUtils.lerp(m.rotation.z, 0, 8 * dt);
     } else if (this.state === "resting" || this.state === "beached" || this.state === "onboat") {
       m.rotation.z = THREE.MathUtils.lerp(m.rotation.z, 0, 5 * dt);
       m.rotation.x = THREE.MathUtils.lerp(m.rotation.x, 0, 5 * dt);
@@ -448,6 +703,14 @@ export class Skimmer {
     const flat = clamp01(this.rock.flat + m.flatAdd);
     const heft = this.rock.heft;
 
+    // Ice first, because it answers every arrival the same way: there is no
+    // surface to break, so the stone lies down and runs. A splash lob included
+    // — you cannot detonate a lid.
+    if (iceAt(this.pos.x, this.pos.z) >= ICE_COVER) {
+      this._slideOn(ctx, waterY, angle);
+      return;
+    }
+
     // A splash lob is thrown to detonate rather than to skip, so it comes down
     // flat on purpose whatever angle it arrives at — that is what makes it a
     // placement shot: the ledge and the pocket behind a spire are targets you
@@ -460,6 +723,22 @@ export class Skimmer {
     const critAngle = 0.30 + flat * 0.30; // ~17°..34°: flattest stones skip steepest
     const minSkipSpeed = (5.6 - flat * 1.8) * m.minSkipMul;
     const steep = steepness(angle, critAngle);
+
+    // Weed. A bed will not let a stone under it, so nothing sinks in here — but
+    // it will not let one through, either. Cutting the corner over a reed bank
+    // is the safe line and the slow one, every time.
+    const weed = weedAt(this.pos.x, this.pos.z);
+    if (weed > WEED_BITE) {
+      this._emit("weed", { at: this.pos.clone(), thick: weed });
+      if (angle < critAngle && hSpeed > minSkipSpeed * (1 + weed)) {
+        const keep = 1 - WEED_DRAG * weed;
+        this.vel.x *= keep; this.vel.z *= keep;
+        this._skipOff(ctx, waterY, hSpeed * keep, angle, critAngle, flat, heft);
+      } else {
+        this._settleOn(ctx, waterY);
+      }
+      return;
+    }
 
     // Coming in perpendicular: the stone punches through the surface instead of
     // riding along it, and nothing about the stone or what is bolted to it
@@ -525,6 +804,25 @@ export class Skimmer {
     this.tapeSkips.push(this.tape.length - 1);
     this._emit("skip", { at: this.pos.clone(), n: this.skips, speed: hSpeed });
     this._checkFlag(ctx, false);
+  }
+
+  /**
+   * Down on the ice. How much of the run survives is the same question a skip
+   * asks — how flat did it arrive — but the answer is gentler at both ends: a
+   * steep one keeps a little instead of drowning, and a flat one keeps nearly
+   * all of it and goes a very long way.
+   */
+  _slideOn(ctx, surfaceY, angle) {
+    const keep = 0.94 - 0.62 * clamp01(angle / PERP_ANGLE);
+    this.vel.x *= keep;
+    this.vel.z *= keep;
+    this.vel.y = 0;
+    this.pos.y = surfaceY + 0.12;
+    this.state = "sliding";
+    this.rock.squashKick?.(0.6);
+    this.rock.kickEyes(1.2);
+    this._emit("slide", { at: this.pos.clone(), speed: Math.hypot(this.vel.x, this.vel.z) });
+    this._checkFlag(ctx, true);
   }
 
   /** ran out of steam — float where it landed */
@@ -658,7 +956,7 @@ Skimmer.prototype._waterContact = function (ctx, waterY) {
  * Dry-run a throw with the same maths for the aim preview.
  * Returns { points: Vector3[], skips: Vector3[], end: 'rest'|'sink'|'flying' }.
  */
-export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed, maxT = 6, islands = null, rocks = null, aimElev = null, mods = DEFAULT_MODS) {
+export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed, maxT = 6, islands = null, rocks = null, aimElev = null, mods = DEFAULT_MODS, ceilings = null) {
   const s = {
     pos: startPos.clone(),
     vel: new THREE.Vector3(),
@@ -667,7 +965,8 @@ export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed
   const floor = mods.powerFloor;
   const speed = MAX_SPEED * (floor + (1 - floor) * power) * (mode === "skip" ? 1 : 0.68) * mods.speedMul;
   s.vel.set(dirXZ.x * Math.cos(elev) * speed, Math.sin(elev) * speed, dirXZ.z * Math.cos(elev) * speed);
-  s.pos.y = Math.max(s.pos.y, WATER_Y + 0.5); // match throwRock: hilltops launch from up there
+  // match throwRock: hilltops and terraces launch from up there
+  s.pos.y = Math.max(s.pos.y, waterLevelAt(s.pos.x, s.pos.z) + 0.5);
 
   const flat = clamp01(rock.flat + mods.flatAdd), heft = rock.heft;
   const points = [];
@@ -675,7 +974,34 @@ export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed
   let end = "flying";
   const dt = 1 / 60;
   let skipCount = 0;
+  let sliding = false;
   for (let t = 0; t < maxT; t += dt) {
+    // on the ice the arc is over and the run has started: no gravity, no hops,
+    // just the sheet taking speed off it (mirrors the "sliding" state)
+    if (sliding) {
+      s.pos.x += s.vel.x * dt;
+      s.pos.z += s.vel.z * dt;
+      s.vel.x *= Math.max(0, 1 - ICE_DRAG * dt);
+      s.vel.z *= Math.max(0, 1 - ICE_DRAG * dt);
+      s.pos.y = waterLevelAt(s.pos.x, s.pos.z) + 0.12;
+      if (t % (dt * 3) < dt) points.push(s.pos.clone());
+      if (rocks) {
+        const hit = hitOutcrop(s.pos, rocks);
+        if (hit) {
+          const { o, nx, nz } = hit;
+          s.pos.x = o.x + nx * o.r;
+          s.pos.z = o.z + nz * o.r;
+          const dot = s.vel.x * nx + s.vel.z * nz;
+          if (dot < 0) { s.vel.x -= 2 * dot * nx; s.vel.z -= 2 * dot * nz; }
+          s.vel.x *= 0.62; s.vel.z *= 0.62;
+          skips.push(s.pos.clone());
+        }
+      }
+      if (iceAt(s.pos.x, s.pos.z) < ICE_COVER) { sliding = false; s.vel.y = -0.5; continue; }
+      if (Math.hypot(s.vel.x, s.vel.z) < ICE_STOP) { end = "rest"; points.push(s.pos.clone()); break; }
+      continue;
+    }
+    const prevY = s.pos.y;
     s.vel.y -= GRAVITY * dt;
     s.pos.addScaledVector(s.vel, dt);
     if ((points.length === 0) || t % (dt * 3) < dt) points.push(s.pos.clone());
@@ -693,29 +1019,60 @@ export function simulateThrow(startPos, dirXZ, power, mode, rock, water, elapsed
         skips.push(s.pos.clone());
       }
     }
-    if (islands) {
-      let hitIsl = false;
-      for (const isl of islands) {
-        if (Math.hypot(s.pos.x - isl.x, s.pos.z - isl.z) < isl.r * mods.islandR && s.pos.y <= 0.55 && s.vel.y < 0) {
-          hitIsl = true;
-          break;
-        }
+    if (ceilings) {
+      const roof = hitCeiling(s.pos, prevY, ceilings);
+      if (roof?.where === "top") { end = "beach"; points.push(s.pos.clone()); break; }
+      if (roof) {
+        s.pos.y = roof.c.y - 0.14;
+        s.vel.y = Math.min(s.vel.y, 0) - 2.2;
+        s.vel.x *= 0.5;
+        s.vel.z *= 0.5;
+        skips.push(s.pos.clone());
       }
-      if (hitIsl) { end = "island"; points.push(s.pos.clone()); break; }
     }
-    if (!isWaterAt(s.pos.x, s.pos.z)) {
-      const gy = terrainHeightAt(s.pos.x, s.pos.z);
+    if (islands) {
+      const isl = islandAt(s.pos.x, s.pos.z, islands, mods.islandR);
+      const sand = isl ? Math.max(islandTopY(isl, s.pos.x, s.pos.z), isl.y ?? 0) : 0;
+      if (isl && s.pos.y <= Math.max((isl.y ?? 0) + 0.55, sand) && s.vel.y < 0) {
+        end = "island"; points.push(s.pos.clone()); break;
+      }
+    }
+    const gy = landY(s.pos.x, s.pos.z, islands);
+    if (!isWaterAt(s.pos.x, s.pos.z) || gy > waterLevelAt(s.pos.x, s.pos.z)) {
       if (s.pos.y <= gy + (s.vel.y < 0 ? 0.18 : 0)) { end = "beach"; points.push(s.pos.clone()); break; }
       continue; // still airborne over land — keep flying, no skip
     }
-    const wy = WATER_Y + water.heightAt(s.pos.x, s.pos.z, elapsed);
+    const wy = waterLevelAt(s.pos.x, s.pos.z) + water.heightAt(s.pos.x, s.pos.z, elapsed);
     if (s.pos.y <= wy + 0.18 && s.vel.y < 0) {
-      const hSpeed = Math.hypot(s.vel.x, s.vel.z);
+      let hSpeed = Math.hypot(s.vel.x, s.vel.z);
       const angle = entryAngle(s.vel);
+      // Ice and weed are painted on the water and never move, so the dotted
+      // line owes you the truth about both of them — same tests, same order.
+      if (iceAt(s.pos.x, s.pos.z) >= ICE_COVER) {
+        s.vel.y = 0;
+        const keep = 0.94 - 0.62 * clamp01(angle / PERP_ANGLE);
+        s.vel.x *= keep; s.vel.z *= keep;
+        s.pos.y = wy + 0.12;
+        skips.push(s.pos.clone());
+        sliding = true;
+        continue;
+      }
       // a splash lob lands flat and detonates there — same call _waterContact makes
       if (mode === "splash") { end = "blast"; points.push(s.pos.clone()); skips.push(s.pos.clone()); break; }
       const critAngle = 0.30 + flat * 0.30;
       const minSkipSpeed = (5.6 - flat * 1.8) * mods.minSkipMul;
+      const weed = weedAt(s.pos.x, s.pos.z);
+      if (weed > WEED_BITE) {
+        if (angle < critAngle && hSpeed > minSkipSpeed * (1 + weed)) {
+          const keep = 1 - WEED_DRAG * weed;
+          s.vel.x *= keep; s.vel.z *= keep;
+          hSpeed *= keep;
+        } else {
+          end = "rest";
+          points.push(s.pos.clone());
+          break;
+        }
+      }
       if (angle >= PERP_ANGLE) {
         end = "sink";
         points.push(s.pos.clone());

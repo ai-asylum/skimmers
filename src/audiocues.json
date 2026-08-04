@@ -1,0 +1,307 @@
+{
+  "sfxStyle": "Isolated single sound effect, close-mic'd and dry, no reverb tail, no music, no voices, no background noise, starts immediately with no silence at the head.",
+  "sfx": {
+    "ambience": {
+      "label": "Lake ambience",
+      "use": "Loops under everything from the first gesture onward",
+      "text": "Calm lake shore ambience: gentle water lapping against pebbles, soft breeze through reeds, faint distant birdsong",
+      "duration": 20,
+      "influence": 0.4,
+      "loop": true,
+      "level": 0.3
+    },
+    "throw": {
+      "label": "Throw whoosh",
+      "use": "The stone leaves the hand; rate and level scale with power",
+      "text": "A hard overarm throw: sharp swish of an arm cutting through air, close and dry",
+      "duration": 1,
+      "influence": 0.7,
+      "loop": false,
+      "level": 0.5
+    },
+    "skip": {
+      "label": "Skip",
+      "use": "Every bounce of a combo; pitch climbs a semitone each skip",
+      "text": "A flat stone skipping once off calm water: crisp wet plink with a light tick of spray",
+      "duration": 1,
+      "influence": 0.8,
+      "loop": false,
+      "level": 0.6
+    },
+    "settle": {
+      "label": "Settle",
+      "use": "The stone runs out of speed and lies down in the water",
+      "text": "A small flat stone losing speed and settling into calm water, soft rounded plop",
+      "duration": 1.5,
+      "influence": 0.8,
+      "loop": false,
+      "level": 0.5
+    },
+    "sink": {
+      "label": "Sink",
+      "use": "The stone goes under for good",
+      "text": "A stone sinking into deep water: deep muffled glub followed by rising bubbles",
+      "duration": 2,
+      "influence": 0.8,
+      "loop": false,
+      "level": 0.6
+    },
+    "blast": {
+      "label": "Splash blast",
+      "use": "Rock-on-rock hit, the big one",
+      "text": "A violent water splash explosion, heavy impact and a wide burst of spray",
+      "duration": 2,
+      "influence": 0.8,
+      "loop": false,
+      "level": 0.75
+    },
+    "boing": {
+      "label": "Rubber rebound",
+      "use": "Springy hull bounce; rate climbs with the bounce count",
+      "text": "A springy rubber rebound, taut cartoon boing with a wet edge to it",
+      "duration": 1,
+      "influence": 0.6,
+      "loop": false,
+      "level": 0.55
+    },
+    "thunk": {
+      "label": "Hull thunk",
+      "use": "The stone hits a boat",
+      "text": "A heavy stone striking a hollow wooden boat hull, loud solid wooden thud, close and blunt",
+      "duration": 1,
+      "influence": 0.9,
+      "loop": false,
+      "level": 0.5
+    },
+    "knockwood": {
+      "label": "Bridge knock",
+      "use": "Clipping the underside of a bridge deck",
+      "text": "A hard knock against thick hollow wooden planks, loud blunt timber thud with a short woody ring",
+      "duration": 1.2,
+      "influence": 0.9,
+      "loop": false,
+      "level": 0.5
+    },
+    "knockstone": {
+      "label": "Cave knock",
+      "use": "Clipping a cave roof — the stone version of the bridge knock",
+      "text": "A stone striking the rock roof of a cave, dull deep stone knock answered by a short cave echo",
+      "duration": 1.5,
+      "influence": 0.8,
+      "loop": false,
+      "level": 0.5
+    },
+    "paddle": {
+      "label": "Mill paddle",
+      "use": "A watermill paddle catches the stone",
+      "text": "A wet wooden watermill paddle slapping a stone away, heavy timber slap over a groaning axle",
+      "duration": 1.5,
+      "influence": 0.7,
+      "loop": false,
+      "level": 0.55
+    },
+    "plunge": {
+      "label": "Waterfall plunge",
+      "use": "Going over a lip; deeper drops play slower",
+      "text": "A stone carried over a waterfall lip: rushing water then a heavy plunge into the pool below",
+      "duration": 2,
+      "influence": 0.7,
+      "loop": false,
+      "level": 0.6
+    },
+    "iceslide": {
+      "label": "Ice slide",
+      "use": "Landing on a frozen sheet; faster arrivals hiss higher",
+      "text": "A stone sliding fast across a frozen lake: long bright hiss with the ringing whistle of ice under it",
+      "duration": 2.5,
+      "influence": 0.6,
+      "loop": false,
+      "level": 0.5
+    },
+    "weeds": {
+      "label": "Weed drag",
+      "use": "Ploughing into a reed bed",
+      "text": "A stone ploughing into wet lake reeds, sodden rustling drag slowing to a stop",
+      "duration": 1.5,
+      "influence": 0.7,
+      "loop": false,
+      "level": 0.45
+    },
+    "deck": {
+      "label": "Deck landing",
+      "use": "The stone lands ON a boat rather than hitting it",
+      "text": "A stone landing flat on a wooden boat deck, wooden clatter settling to rest",
+      "duration": 1.2,
+      "influence": 0.8,
+      "loop": false,
+      "level": 0.5
+    },
+    "reel": {
+      "label": "Reel tick",
+      "use": "Fishing reel ratchet — fires rapidly, so it stays quiet",
+      "text": "One click of a fishing reel ratchet, tiny dry tick",
+      "duration": 0.5,
+      "influence": 0.8,
+      "loop": false,
+      "level": 0.22
+    },
+    "catch": {
+      "label": "Catch",
+      "use": "Fishing pulls something up",
+      "text": "Bright cheerful reward chime, two clear bell notes ringing out loud and clean, video game item pickup",
+      "duration": 1.2,
+      "influence": 0.7,
+      "loop": false,
+      "level": 0.5
+    },
+    "fishmiss": {
+      "label": "Fish miss",
+      "use": "The catch got away",
+      "text": "Short soft descending failure blip, dull and deflated, video game UI",
+      "duration": 0.8,
+      "influence": 0.5,
+      "loop": false,
+      "level": 0.4
+    },
+    "pip": {
+      "label": "UI pip",
+      "use": "Every button in the game; by far the most-fired cue",
+      "text": "Soft short UI click blip, clean and bright, video game menu tick",
+      "duration": 0.5,
+      "influence": 0.6,
+      "loop": false,
+      "level": 0.3
+    },
+    "light": {
+      "label": "Start light",
+      "use": "The tee light changing to red, then orange; pitch climbs with the count",
+      "text": "Single short electronic beep of a race start light, clean square tone",
+      "duration": 0.5,
+      "influence": 0.6,
+      "loop": false,
+      "level": 0.35
+    },
+    "go": {
+      "label": "Green light",
+      "use": "The race starts",
+      "text": "Sport commentator saying \"GO\" with enthusiams. Smash brawl style",
+      "duration": 1.1,
+      "influence": 0.5,
+      "loop": false,
+      "level": 0.5
+    },
+    "grind": {
+      "label": "Shaping grind",
+      "use": "Grinding a stone into shape; fires repeatedly while dragging",
+      "text": "Short rasping scrape of stone against a grinding wheel",
+      "duration": 0.6,
+      "influence": 0.8,
+      "loop": false,
+      "level": 0.25
+    },
+    "clank": {
+      "label": "Core clank",
+      "use": "The drill hits the dense heart of a stone",
+      "text": "Hard bright metallic ping of a drill bit striking dense stone",
+      "duration": 0.5,
+      "influence": 0.8,
+      "loop": false,
+      "level": 0.3
+    },
+    "paint": {
+      "label": "Paint dab",
+      "use": "Painting a stone; fires repeatedly while dragging",
+      "text": "Soft wet brush dab against stone, one short paint stroke",
+      "duration": 0.6,
+      "influence": 0.7,
+      "loop": false,
+      "level": 0.3
+    },
+    "pick": {
+      "label": "Pick up rock",
+      "use": "Lifting a stone off the bench or the shore",
+      "text": "Picking a pebble out of gravel, dry stone clack",
+      "duration": 0.7,
+      "influence": 0.8,
+      "loop": false,
+      "level": 0.4
+    },
+    "gull": {
+      "label": "Gull",
+      "use": "Fires on its own every 7-19s as lake colour",
+      "text": "A single distant seagull cry over open water, far away and thin",
+      "duration": 1.5,
+      "influence": 0.7,
+      "loop": false,
+      "level": 0.16
+    },
+    "holewin": {
+      "label": "Hole won",
+      "use": "You took the hole",
+      "text": "Short triumphant fanfare, four rising notes, cheerful and bright, video game round won",
+      "duration": 2,
+      "influence": 0.4,
+      "loop": false,
+      "level": 0.6
+    },
+    "holelose": {
+      "label": "Hole lost",
+      "use": "A rival took the hole",
+      "text": "Short neutral three-note jingle, mildly deflated, video game round lost",
+      "duration": 2,
+      "influence": 0.4,
+      "loop": false,
+      "level": 0.5
+    },
+    "win": {
+      "label": "Victory",
+      "use": "The whole course is won",
+      "text": "Triumphant victory fanfare, rising notes resolving into a warm major chord, celebratory video game win",
+      "duration": 4,
+      "influence": 0.4,
+      "loop": false,
+      "level": 0.7
+    },
+    "lose": {
+      "label": "Defeat",
+      "use": "The course is lost",
+      "text": "Descending four-note failure jingle, glum and final, video game over",
+      "duration": 3,
+      "influence": 0.4,
+      "loop": false,
+      "level": 0.6
+    },
+    "splashed": {
+      "label": "Splashed",
+      "use": "A rival's splash catches you",
+      "text": "Comic drenching: a bucket of lake water thrown over someone, wet slap and dribble",
+      "duration": 1.5,
+      "influence": 0.6,
+      "loop": false,
+      "level": 0.55
+    }
+  },
+  "music": {
+    "menu": {
+      "label": "Menu",
+      "use": "Title screen and the bench; loops",
+      "prompt": "Warm unhurried acoustic folk instrumental for a lakeside game menu. Fingerpicked acoustic guitar, soft upright bass, brushed snare, gentle mandolin. Sunny, patient, nostalgic. Steady mid-slow tempo, no build, loops calmly.",
+      "duration": 75,
+      "level": 0.45
+    },
+    "play": {
+      "label": "Gameplay",
+      "use": "Under a race; loops",
+      "prompt": "Light rhythmic acoustic instrumental for playful lakeside competition. Plucked guitar and banjo ostinato, hand percussion, warm bass. Bouncy and upbeat but never frantic, sits behind gameplay, steady loop with no dramatic swells.",
+      "duration": 90,
+      "level": 0.45
+    },
+    "victory": {
+      "label": "Victory",
+      "use": "Plays once over the results screen when you win",
+      "prompt": "Short celebratory acoustic folk flourish. Full band hits, mandolin and fiddle trading a bright triumphant melody, warm brass swell, big satisfying final chord.",
+      "duration": 15,
+      "level": 0.5
+    }
+  }
+}

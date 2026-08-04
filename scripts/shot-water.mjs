@@ -1,51 +1,67 @@
-// Drive the solo flow all the way into a race and capture the two views that
-// matter for the water shader: the wide title lake and the in-race channel.
+// Photograph the moving-water holes (src/holes.js 9-11) in a real browser: the
+// current's flow ribbons, white water in the rapids, the ice sheets, reed beds,
+// the beaver dams and the fallen tree. All of it is either shader work or a
+// terrain rebuild, so none of it can be checked headless.
+//
+// Usage: node scripts/shot-water.mjs [outDir] [port]
 import { chromium } from "playwright";
 
-const url = process.argv[2] || "http://localhost:8791/index.html";
-const tag = process.argv[3] || "shot";
+const out = process.argv[2] || "/tmp/water";
+const port = process.argv[3] || "8741";
 
 const browser = await chromium.launch({
-  args: ["--use-angle=metal", "--ignore-gpu-blocklist", "--enable-unsafe-swiftshader"],
+  args: ["--use-gl=angle", "--use-angle=swiftshader", "--ignore-gpu-blocklist"],
 });
-const page = await browser.newPage({ viewport: { width: 1280, height: 760 } });
-const logs = [];
-page.on("console", (m) => logs.push(`[${m.type()}] ${m.text()}`));
-page.on("pageerror", (e) => logs.push(`[pageerror] ${e.message}`));
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const problems = [];
+page.on("console", (m) => { if (m.type() === "error") problems.push(m.text()); });
+page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
 
-await page.goto(url, { waitUntil: "networkidle" });
-await page.waitForTimeout(2500);
-await page.screenshot({ path: `/tmp/${tag}-title.png` });
+await page.goto(`http://localhost:${port}/`, { waitUntil: "networkidle" });
+await page.waitForTimeout(1200);
 
-await (await page.$("#play-btn"))?.click();
-await page.waitForTimeout(2200);
+// [name, hole index, camera eye, look-at]
+const shots = [
+  ["race-rapids", 8, [-12, 14, 58], [-8, 2, 34]],
+  ["race-weeds", 8, [-36, 10, 58], [-36, 2, 38]],
+  ["race-downstream", 8, [-70, 26, 66], [0, 0, 30]],
+  ["coldsnap-ice", 9, [48, 12, 70], [48, 1, 49]],
+  ["coldsnap-ice-far", 9, [70, 30, 74], [10, 0, 36]],
+  ["coldsnap-edge", 9, [-8, 8, 44], [-24, 1, 28]],
+  // from upstream, which is where the player is standing: the notch has to be
+  // legible from the tee or it is not a shot, it is a surprise
+  ["lodge-dam", 10, [-64, 10, -57], [-46, 3, -45]],
+  ["lodge-dam-close", 10, [-56, 5, -51], [-46, 3, -45]],
+  ["lodge-dam-below", 10, [-46, 9, -28], [-46, 2, -45]],
+  ["lodge-log", 10, [-6, 9, -20], [-9, 2, -40]],
+  ["lodge-log-along", 10, [10, 5, -34], [-14, 2, -44]],
+  ["lodge-dam2", 10, [24, 8, -14], [24, 2, -32]],
+];
 
-const c = await page.$("#c");
-const b = await c.boundingBox();
-const nextVisible = async () => {
-  const el = await page.$("#phase-next");
-  return el && (await el.isVisible());
-};
-
-// scan across the beach line until a candidate rock gets selected
-outer: for (const yy of [0.47, 0.44, 0.5, 0.42]) {
-  for (let i = 0; i < 9; i++) {
-    await page.mouse.click(b.x + b.width * (0.3 + i * 0.05), b.y + b.height * yy);
-    await page.waitForTimeout(250);
-    if (await nextVisible()) break outer;
-  }
+for (const [name, hole, eye, at] of shots) {
+  const err = await page.evaluate(([h]) => {
+    const S = window.__skimmers;
+    try { S.setupHole(h); return null; } catch (e) { return String(e); }
+  }, [hole]);
+  if (err) { problems.push(`setupHole(${hole}) threw: ${err}`); continue; }
+  await page.waitForTimeout(900);
+  await page.evaluate(([e, p]) => {
+    const S = window.__skimmers;
+    S.cam.mode = "closeup";
+    S.cam.pos.set(e[0], e[1], e[2]);
+    S.cam.look.set(p[0], p[1], p[2]);
+    S.camRig.position.copy(S.cam.pos);
+    S.cam.lookCur.copy(S.cam.look);
+    S.camRig.lookAt(S.cam.lookCur);
+    for (const el of document.body.children) {
+      if (el.tagName !== "CANVAS") el.style.visibility = "hidden";
+    }
+  }, [eye, at]);
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: `${out}/${name}.png` });
+  console.log(`shot ${name} (hole ${hole + 1})`);
 }
 
-// FIND -> SHAPE -> PAINT -> RACE
-for (let i = 0; i < 3; i++) {
-  if (await nextVisible()) await (await page.$("#phase-next")).click();
-  await page.waitForTimeout(i === 2 ? 4500 : 2200);
-  if (i === 1) await page.screenshot({ path: `/tmp/${tag}-shore.png` });
-}
-await page.screenshot({ path: `/tmp/${tag}-race.png` });
-
-console.log(`wrote /tmp/${tag}-{title,shore,race}.png`);
-const noise = /webgl|vite|analytics|Download the React/i;
-const keep = logs.filter((l) => !noise.test(l));
-console.log(keep.length ? "LOGS:\n" + keep.join("\n") : "no notable logs");
+console.log(problems.length ? `CONSOLE ERRORS:\n${[...new Set(problems)].join("\n")}` : "no console errors");
 await browser.close();
+process.exit(problems.length ? 1 : 0);
