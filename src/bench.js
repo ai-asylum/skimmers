@@ -1,7 +1,7 @@
 /**
  * The park bench up on the shore: where your stones wait between races.
  *
- * Three slots along the seat, each with the same lifebuoy the fishing minigame
+ * Three slots along the seat, each with the same floater the fishing minigame
  * ties its line to (lifebuoy.js), shrunk to bench size. A full slot bobs its
  * stone gently in the ring; an empty ring is left plain and the pointing finger
  * (ui.setTapHand, parked on `slotHandPoint`) does the inviting.
@@ -13,7 +13,7 @@
 import * as THREE from "three";
 import { terrainHeightAt } from "./terrain.js";
 import { SHELF_SLOTS } from "./shelf.js";
-import { makeLifebuoy, BUOY_R, BUOY_TUBE } from "./lifebuoy.js";
+import { makeFloater, BUOY_R, BUOY_TUBE } from "./lifebuoy.js";
 import { paintFloater } from "./cosmetics.js";
 
 const SEAT_Y = 0.95;      // seat top above the bench's own ground plane
@@ -85,7 +85,7 @@ export class RockBench {
       slot.position.set(x, SEAT_Y + RING_TUBE * 0.8, 0.06);
       this.group.add(slot);
 
-      const buoy = makeLifebuoy();
+      const buoy = makeFloater();
       const ring = buoy.group;
       ring.scale.setScalar(RING_SCALE);
       slot.add(ring);
