@@ -3,10 +3,12 @@
 // a matching <section id="tab-x">, and an init entry in TABS below.
 import { initLevelEditor } from "./leveleditor.js";
 import { initEyesLab } from "./eyes.js";
+import { initAudioLab } from "./audiolab.js";
 
 const TABS = {
   level: initLevelEditor,
   eyes: initEyesLab,
+  audio: initAudioLab,
 };
 
 const booted = new Set();
