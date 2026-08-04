@@ -57,6 +57,7 @@ export class Grass {
   // count scales with the scattered area (see setHole's maxR) so a hole that
   // runs corner to corner isn't grassed thinner than a compact one was
   constructor(scene, { count = 11000, height = 1.15, bladeWidth = 0.17, color = 0x8fdb5c } = {}) {
+    this.max = count; // instances allocated; a biome can only thin below this
     this.cap = count;
     this.uTime = { value: 0 };
     this.uWind = { value: 0.16 };
@@ -136,6 +137,8 @@ uniform float uTime; uniform float uWind; uniform float uWindSpeed; uniform vec2
   // ---- debug tweak-menu hooks ----
   getColor() { return "#" + this.mat.color.getHexString(); }
   setColor(hex) { this.mat.color.set(hex); }
+  /** thin the meadow for a biome; 1 is full, and it can never exceed the pool */
+  setDensity(mul = 1) { this.cap = Math.min(this.max, Math.round(this.max * mul)); }
   getWind() { return this.uWind.value; }
   setWind(v) { this.uWind.value = v; }
   getWindSpeed() { return this.uWindSpeed.value; }

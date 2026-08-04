@@ -3,7 +3,9 @@
  *   1-bench.png    the bench with the shell purse up top
  *   2-hats.png     the garage, hat rack
  *   3-upgrades.png the garage, upgrade wall with two sockets filled
- *   4-cups.png     the cup + difficulty picker
+ *   4-cups.png     the cup picker, step one
+ *   4b-class.png   step two, the classes
+ *   4c-go.png      step three, the start plate
  *   5-race.png     the first hole, stone wearing its hat
  *   6-payout.png   the results board counting shells out
  *   7-back.png     back on the bench, purse heavier
@@ -22,7 +24,10 @@ const page = await browser.newPage({ viewport: { width: 1100, height: 620 } });
 const logs = [];
 page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") logs.push(`${m.type()}: ${m.text()}`); });
 page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));
-await page.route("**/@vite/client", (r) => r.abort());
+// This used to abort **/@vite/client to keep HMR quiet. Under Vite 8 the client
+// is part of the module graph rather than a side-loaded script, so aborting it
+// takes main.js down with it and the page comes up with no window.__skimmers.
+// Letting it connect is harmless: nothing edits a file mid-run.
 
 const shot = async (name) => { await page.screenshot({ path: `${out}/${name}.png` }); console.log("shot", name); };
 const ok = (cond, msg) => console.log(`${cond ? "ok  " : "FAIL"}: ${msg}`);
@@ -126,14 +131,43 @@ await page.waitForTimeout(600);
 // --- cup select -------------------------------------------------------------
 await page.click("#phase-next"); // the stone is ready -> race
 await page.waitForTimeout(700);
+/**
+ * The picker is three steps — cup, class, start plate — and #cup-go is Next on
+ * the first two and the race on the last, so pressing it until the layer goes
+ * away is the whole walk, whichever step we came in on.
+ */
+const walkPicker = async (label) => {
+  for (let i = 0; i < 4 && (await page.isVisible("#cup-ui")); i++) {
+    if (await page.isDisabled("#cup-go")) break;
+    await page.click("#cup-go");
+    await page.waitForTimeout(250);
+  }
+  ok(!(await page.isVisible("#cup-ui")), `the picker walked out to the water (${label})`);
+};
+
 ok(await page.isVisible("#cup-ui"), "the cup picker opened");
 const cupNames = await page.$$eval("#cup-list .pick", (c) => c.map((x) => x.textContent.trim().slice(0, 24)));
 console.log("      cups:", cupNames.join(" | "));
-const locked = await page.$$eval("#cup-list .pick.locked, #tier-list .pick.locked", (c) => c.length);
-ok(locked > 0, `harder stuff starts locked (${locked} locked cards)`);
+const lockedCups = await page.$$eval("#cup-list .pick.locked", (c) => c.length);
+ok(lockedCups > 0, `harder cups start locked (${lockedCups} locked)`);
 await shot("4-cups");
 
+// step two: the classes, which only exist in the DOM once their pane is up
 await page.click("#cup-go");
+await page.waitForTimeout(350);
+const lockedTiers = await page.$$eval("#tier-list .pick.locked", (c) => c.length);
+ok(lockedTiers > 0, `harder classes start locked (${lockedTiers} locked)`);
+await shot("4b-class");
+
+// step three: the start plate, with the picks read back
+await page.click("#cup-go");
+await page.waitForTimeout(350);
+const tracks = await page.$$eval("#cup-summary .go-track", (t) => t.map((x) => x.textContent.trim()));
+console.log("      start line:", tracks.join(" | "));
+ok(tracks.length === 3, `the three holes are on the start line (${tracks.length})`);
+await shot("4c-go");
+
+await walkPicker("first cup");
 await page.waitForTimeout(3000);
 const st = await page.evaluate(() => window.__skimmers.G.state);
 ok(st === "race", `race started (state=${st})`);
@@ -173,10 +207,10 @@ await page.waitForTimeout(1600);
 ok(await page.isVisible("#cup-ui"), "next cup goes straight back to the board");
 const secondOpen = await page.$$eval("#cup-list .pick:not(.locked)", (c) => c.length);
 ok(secondOpen === 2, `the cup we just won opened the next one (${secondOpen} open)`);
-// take the newly opened cup this time
+// take the newly opened cup this time — picking one also moves the step along
 await page.evaluate(() => document.querySelectorAll("#cup-list .pick")[1].click());
 await page.waitForTimeout(300);
-await page.click("#cup-go");
+await walkPicker("second cup");
 await page.waitForTimeout(3200);
 const st2 = await page.evaluate(() => window.__skimmers.G.state);
 ok(st2 === "race", `second cup started clean (state=${st2})`);
