@@ -124,21 +124,36 @@ Expected result: ~PEGI 3 / ESRB Everyone.
 
 ## Data safety
 
-*(applies only if `VITE_POSTHOG_KEY` is set — otherwise "No data collected".)*
+- Does your app collect or share user data? → **Yes — collect *and* share**
 
-- Does your app collect or share user data? → **Yes (collect only; not shared/sold)**
-- Data types collected:
-  - **App activity** — in-app product events (`session_start`, `race_start`, `race_end`)
-  - **Device or other IDs** — anonymous PostHog `distinct_id`
-  - **Approximate location** — country-level, derived from IP by PostHog's geoIP
+> ⚠️ **Two SDKs feed this form, not one.** This section used to be written from
+> PostHog's point of view alone and answered "collect only, not shared". That
+> ignored the advertising ID AppsFlyer sends off-device, and Play rejected the
+> release: *"Sécurité des données (ID de l'appareil ou autres ID : non
+> déclaré)"*. Declare all three types below.
+
+| Data type | Collected | Shared | Purposes | Why |
+|---|---|---|---|---|
+| **Device or other IDs** | Yes | **Yes** | Analytics + Advertising or marketing | AppsFlyer sends the **advertising ID (GAID)** off-device, and attribution postbacks reach the ad network (AppLovin) — user-level identifiers leaving for a third party is *sharing*, not just collection. Also covers PostHog's anonymous `distinct_id`. |
+| **App activity** → "Other actions" | Yes | No | Analytics | PostHog product events (`session_start`, `race_start`, `race_end`). PostHog is a processor acting on our behalf, so this is collection only. |
+| **Approximate location** | Yes | No | Analytics | Country-level only, derived from IP by PostHog's geoIP. |
+
+For every type: **not** processed ephemerally, and collection is **required**
+(the app ships no in-app opt-out toggle).
+
 - Session replay: **armed but never started** in `src/analytics.js`
   (`disable_session_recording: true`; `enableSessionReplay()` is never called) —
   **no recordings ship**. No extra Data Safety category.
-- Purpose: **Analytics** only
-- Shared with third parties: **No** direct sale; PostHog acts as a processor (EU cloud)
 - Encrypted in transit: **Yes**
-- Users can request deletion: **Yes** — email `hello@misaligned.games`
-  (anonymous only; no accounts)
+- Users can request deletion: **Yes**. The Console field needs an **https URL,
+  not an email**, so give the privacy policy:
+  `https://skimmers-lake.vercel.app/store/privacy.html` — its "Your choices"
+  section carries the procedure and `hello@misaligned.games`.
+
+**If `VITE_POSTHOG_KEY` were ever unset**, the PostHog rows above fall away — but
+the Device-IDs row does **not**: AppsFlyer is gated on its own
+`VITE_APPSFLYER_DEV_KEY`, which is an org-wide secret that is always present in
+CI. Only a build with neither key can answer "No data collected".
 
 ## App content declarations
 
